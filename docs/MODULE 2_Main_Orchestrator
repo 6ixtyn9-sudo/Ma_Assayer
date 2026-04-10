@@ -1,0 +1,162 @@
+/******************************************************************************
+ * MA ASSAYER — Complete Production Module
+ * 
+ * "Testing the purity of predictions - separating Gold from Charcoal"
+ * 
+ * COMPLETE ROBUST IMPLEMENTATION
+ * 
+ * ARCHITECTURE:
+ * ├── M1_Output_          Sheet Writers
+ * ├── M2_Main_            Controller/Orchestrator
+ * ├── M3_Flagger_         Apply Flags to Source
+ * ├── M4_Discovery_       Edge Discovery Engine
+ * ├── M5_Config_          Configuration & Constants
+ * ├── M6_ColResolver_     Fuzzy Column Matching (case-insensitive)
+ * ├── M7_Parser_          Data Parsing
+ * ├── M8_Stats_           Statistical Calculations
+ * ├── M9_Utils_           Utility Functions
+ * └── M10_Log_            Logging System
+ ******************************************************************************/
+ 
+// ============================================================================
+// MODULE: Main_ — Orchestrator
+// ============================================================================
+
+const Main_ = {
+  
+  /**
+   * Run the full assay process
+   */
+  runAssay() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 1. Initialize
+  Log_.init();
+  Config_.sheets.side = "Side"; // Ensure defaults
+  Config_.sheets.totals = "Totals";
+  
+  try {
+    // 2. Parse Data
+    const sideData = Parser_.parseSideSheet(ss);
+    const totalsData = Parser_.parseTotalsSheet(ss);
+    
+    const allBets = [...sideData.bets, ...totalsData.bets];
+    
+    if (allBets.length === 0) {
+      Log_.error("No valid bets found in Side or Totals sheets.");
+      Log_.writeToSheet(ss);
+      return;
+    }
+    
+    // 3. Statistical Analysis
+    Log_.section("Running Statistics");
+    const globalStats = Stats_.calcBasic(allBets);
+    const sideStats = Stats_.calcBasic(sideData.bets);
+    const totalsStats = Stats_.calcBasic(totalsData.bets);
+    
+    // 4. League Assay
+    const leagueAssay = Stats_.assayLeagues(allBets, globalStats);
+
+    // =========================================================
+    // PATCH: Team assay + Matchup assay (Side only)
+    // =========================================================
+    const teamAssay = Stats_.assayTeams(sideData.bets, globalStats);
+    const matchupAssay = Stats_.assayMatchups(sideData.bets, globalStats);
+    
+    // 5. Edge Discovery (Using patched Discovery_)
+    const edges = Discovery_.discoverAll(sideData.bets, totalsData.bets);
+    
+    // 6. Exclusion Analysis
+    const exclusionImpact = Stats_.calcExclusionImpact(allBets, globalStats);
+    
+    // 7. Write Outputs
+    Output_.writeVault(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay);
+    Output_.writeLeagueAssay(ss, leagueAssay, globalStats);
+    Output_.writeDiscoveredEdges(ss, edges, globalStats);
+    Output_.writeExclusionImpact(ss, exclusionImpact, globalStats);
+
+    // PATCH (optional): write Team + Matchup assay tabs if present
+    if (Output_.writeTeamAssay) Output_.writeTeamAssay(ss, teamAssay);
+    if (Output_.writeMatchupAssay) Output_.writeMatchupAssay(ss, matchupAssay);
+
+    // ── MOTHER CONTRACT OUTPUT (additive only) ──
+    Output_.writeAssayerEdges(ss, edges);
+    Output_.writeAssayerLeaguePurity(ss, leagueAssay);
+
+    // 8. Apply Flags Back to Source (PATCH: pass assays)
+    Flagger_.applyFlags(ss, edges, leagueAssay, teamAssay, matchupAssay);
+    
+    // 9. Generate Summary
+    const logSummary = Log_.summary();
+    Output_.writeSummary(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, logSummary);
+    
+    // 10. Finish
+    Log_.writeToSheet(ss);
+    SpreadsheetApp.getUi().alert("Assay Complete! Check the 'MA_Vault' tab.");
+    
+  } catch (err) {
+    Log_.error(`CRITICAL FAILURE: ${err.message}`, err.stack);
+    Log_.writeToSheet(ss);
+    SpreadsheetApp.getUi().alert(`Error: ${err.message}`);
+  }
+},
+  
+  /**
+   * Run just the flagger (useful if manual edits made to edges)
+   */
+   runFlaggerOnly() {
+   const ss = SpreadsheetApp.getActiveSpreadsheet();
+   Log_.init();
+  
+   try {
+     const sideData = Parser_.parseSideSheet(ss);
+     const totalsData = Parser_.parseTotalsSheet(ss);
+     const allBets = [...sideData.bets, ...totalsData.bets];
+    
+     // Re-run minimal stats needed for flagging
+     const globalStats = Stats_.calcBasic(allBets);
+     const leagueAssay = Stats_.assayLeagues(allBets, globalStats);
+
+     // PATCH: team + matchup assays for flagger-only mode
+     const teamAssay = Stats_.assayTeams(sideData.bets, globalStats);
+     const matchupAssay = Stats_.assayMatchups(sideData.bets, globalStats);
+
+     const edges = Discovery_.discoverAll(sideData.bets, totalsData.bets);
+    
+     // PATCH: pass assays
+     Flagger_.applyFlags(ss, edges, leagueAssay, teamAssay, matchupAssay);
+
+     // ── MOTHER CONTRACT OUTPUT (additive only) ──
+     Output_.writeAssayerEdges(ss, edges);
+     Output_.writeAssayerLeaguePurity(ss, leagueAssay);
+
+     Log_.writeToSheet(ss);
+     SpreadsheetApp.getUi().alert("Flags Re-Applied Successfully.");
+    
+   } catch (err) {
+     Log_.error(`FLAGGER FAILED: ${err.message}`);
+     Log_.writeToSheet(ss);
+   }
+ },
+};
+
+/**
+ * Standard Apps Script Entry Points
+ */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('⚗️ Ma Assayer')
+    .addItem('🚀 Run Full Assay', 'runAssay')
+    .addSeparator()
+    .addItem('🚩 Refresh Flags Only', 'runFlagger')
+    .addItem('🧹 Clear Logs', 'clearLogs')
+    .addToUi();
+}
+
+function runAssay() { Main_.runAssay(); }
+function runFlagger() { Main_.runFlaggerOnly(); }
+function clearLogs() { 
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(Config_.sheets.logs);
+  if (sheet) sheet.clear();
+}
