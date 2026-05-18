@@ -39,8 +39,9 @@ const Main_ = {
     // 2. Parse Data
     const sideData = Parser_.parseSideSheet(ss);
     const totalsData = Parser_.parseTotalsSheet(ss);
+    const intakeData = Parser_.parseIntakeMarketSheets(ss);
     
-    const allBets = [...sideData.bets, ...totalsData.bets];
+    const allBets = [...sideData.bets, ...totalsData.bets, ...(intakeData ? intakeData.bets : [])];
     
     if (allBets.length === 0) {
       Log_.error("No valid bets found in Side or Totals sheets.");
@@ -111,7 +112,8 @@ const Main_ = {
    try {
      const sideData = Parser_.parseSideSheet(ss);
      const totalsData = Parser_.parseTotalsSheet(ss);
-     const allBets = [...sideData.bets, ...totalsData.bets];
+     const intakeData = Parser_.parseIntakeMarketSheets(ss);
+     const allBets = [...sideData.bets, ...totalsData.bets, ...(intakeData ? intakeData.bets : [])];
     
      // Re-run minimal stats needed for flagging
      const globalStats = Stats_.calcBasic(allBets);

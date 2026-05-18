@@ -944,7 +944,7 @@ writeMatchupAssay(ss, matchupAssay) {
       rows.push([
         l.league || "",                                  // league
         qLabel,                                          // quarter
-        l.source || "",                                  // source  (Side|Totals)
+        l.source || "",                                  // source  (Side|Totals|Other)
         l.gender || (l.isWomen ? "W" : "M"),             // gender  (M|W)
         l.tier   || "UNKNOWN",                           // tier    (EVEN|MEDIUM|STRONG|UNKNOWN)
         l.typeKey || "",
