@@ -1117,139 +1117,6 @@ const Parser_ = {
     Log_.sectionEnd("Parsing Totals Sheet");
 
     return { bets: bets, columns: resolved, errors: parseErrors, stats: stats };
-  }
-};
-
-function auditSideOutcomes() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName(Config_.sheets.side);
-  if (!sheet) {
-    Logger.log("Side sheet not found.");
-    return [];
-  }
-
-  var data = sheet.getDataRange().getValues();
-  if (!data || data.length < 2) {
-    Logger.log("No data rows.");
-    return [];
-  }
-
-  ColResolver_.init();
-  var resolveResult = ColResolver_.resolve(data[0], Config_.sideColumnAliases, "Side");
-  var resolved = resolveResult.resolved;
-
-  if (!resolved || resolved.actual === undefined || resolved.actual === null) {
-    Logger.log("ERROR: No 'actual' / 'score' column resolved for Side sheet.");
-    Logger.log("Ensure Config_.sideColumnAliases.actual is configured.");
-    return [];
-  }
-
-  var hasOutcomeCol = (resolved.outcome !== undefined && resolved.outcome !== null);
-
-  var mismatches = [];
-  var checked    = 0;
-  var skipped    = 0;
-  var matched    = 0;
-
-  for (var i = 1; i < data.length; i++) {
-    var row = data[i];
-
-    var pick    = String(Parser_.getValue(row, resolved, "pick", "")  || "");
-    var actual  = Parser_.getValue(row, resolved, "actual", "");
-    var sideCol = String(Parser_.getValue(row, resolved, "side", "")  || "");
-
-    if (!pick || actual === "" || actual === null || actual === undefined) {
-      skipped++;
-      continue;
-    }
-
-    // Strict side extraction (lossy clean + STRICT regex)
-    var sideParsed = Parser_.parseSide(pick, sideCol);
-    if (sideParsed !== "H" && sideParsed !== "A") {
-      skipped++;
-      continue;
-    }
-
-    // Grade using PURE OUTRIGHT (1X2): tie = LOSS, no spread math
-    var calculated = Parser_.gradeSideFromScore(actual, pick, sideCol);
-
-    if (calculated === null) {
-      skipped++;
-      continue;
-    }
-
-    if (!hasOutcomeCol) {
-      // Can compute but nothing to compare against — just count
-      checked++;
-      continue;
-    }
-
-    var outcomeRaw = Parser_.getValue(row, resolved, "outcome", "");
-    var recorded   = Parser_.parseOutcome(outcomeRaw);
-
-    if (recorded === null) {
-      skipped++;
-      continue;
-    }
-
-    checked++;
-
-    if (calculated === recorded) {
-      matched++;
-    } else {
-      // Recorded may carry handicap semantics (HIT/MISS/PUSH).
-      // Computed is strict 1X2 (HIT or MISS only — no push exists).
-      var recLabel = recorded === 1 ? "HIT"
-                   : (recorded === 0 ? "MISS" : "PUSH");
-      var calLabel = calculated === 1 ? "HIT" : "MISS";
-
-      mismatches.push({
-        row:         i + 1,
-        pick:        pick,
-        actual:      String(actual),
-        sideCol:     sideCol,
-        sideParsed:  sideParsed,
-        recorded:    recLabel,
-        calculated:  calLabel,
-        outcomeRaw:  String(outcomeRaw || "")
-      });
-    }
-  }
-
-  // ── Report ──
-  Logger.log("===== SIDE OUTCOME AUDIT (PURE OUTRIGHT 1X2; TIE = LOSS) =====");
-  Logger.log(
-    "Checked: " + checked + " | Matched: " + matched +
-    " | Mismatches: " + mismatches.length + " | Skipped: " + skipped
-  );
-
-  if (checked > 0 && mismatches.length === 0) {
-    Logger.log(
-      "✅ All " + checked +
-      " outcomes match strict 1X2 outright-win logic. Source data is clean."
-    );
-  }
-
-  if (mismatches.length > 0) {
-    var errorRate = ((mismatches.length / checked) * 100).toFixed(1);
-    Logger.log("ERROR RATE: " + errorRate + "%");
-    Logger.log("");
-    Logger.log("Mismatches (first 25):");
-
-    for (var k = 0; k < Math.min(25, mismatches.length); k++) {
-      var m = mismatches[k];
-      Logger.log(
-        "  Row " + m.row +
-        ": " + m.pick +
-        " | Side: " + m.sideParsed +
-        " | Score: " + m.actual +
-        " | Recorded: " + m.recorded + " (" + m.outcomeRaw + ")" +
-        " | 1X2 check: " + m.calculated
-      );
-    }
-  }
-
-  return mismatches;
   },
 
   // =========================================================================
@@ -1402,4 +1269,136 @@ function auditSideOutcomes() {
     return { bets: allBets, sheetSummaries, skippedSheets, skippedRows: totalSkippedRows };
   }
 };
+
+function auditSideOutcomes() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(Config_.sheets.side);
+  if (!sheet) {
+    Logger.log("Side sheet not found.");
+    return [];
+  }
+
+  var data = sheet.getDataRange().getValues();
+  if (!data || data.length < 2) {
+    Logger.log("No data rows.");
+    return [];
+  }
+
+  ColResolver_.init();
+  var resolveResult = ColResolver_.resolve(data[0], Config_.sideColumnAliases, "Side");
+  var resolved = resolveResult.resolved;
+
+  if (!resolved || resolved.actual === undefined || resolved.actual === null) {
+    Logger.log("ERROR: No 'actual' / 'score' column resolved for Side sheet.");
+    Logger.log("Ensure Config_.sideColumnAliases.actual is configured.");
+    return [];
+  }
+
+  var hasOutcomeCol = (resolved.outcome !== undefined && resolved.outcome !== null);
+
+  var mismatches = [];
+  var checked    = 0;
+  var skipped    = 0;
+  var matched    = 0;
+
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+
+    var pick    = String(Parser_.getValue(row, resolved, "pick", "")  || "");
+    var actual  = Parser_.getValue(row, resolved, "actual", "");
+    var sideCol = String(Parser_.getValue(row, resolved, "side", "")  || "");
+
+    if (!pick || actual === "" || actual === null || actual === undefined) {
+      skipped++;
+      continue;
+    }
+
+    // Strict side extraction (lossy clean + STRICT regex)
+    var sideParsed = Parser_.parseSide(pick, sideCol);
+    if (sideParsed !== "H" && sideParsed !== "A") {
+      skipped++;
+      continue;
+    }
+
+    // Grade using PURE OUTRIGHT (1X2): tie = LOSS, no spread math
+    var calculated = Parser_.gradeSideFromScore(actual, pick, sideCol);
+
+    if (calculated === null) {
+      skipped++;
+      continue;
+    }
+
+    if (!hasOutcomeCol) {
+      // Can compute but nothing to compare against — just count
+      checked++;
+      continue;
+    }
+
+    var outcomeRaw = Parser_.getValue(row, resolved, "outcome", "");
+    var recorded   = Parser_.parseOutcome(outcomeRaw);
+
+    if (recorded === null) {
+      skipped++;
+      continue;
+    }
+
+    checked++;
+
+    if (calculated === recorded) {
+      matched++;
+    } else {
+      // Recorded may carry handicap semantics (HIT/MISS/PUSH).
+      // Computed is strict 1X2 (HIT or MISS only — no push exists).
+      var recLabel = recorded === 1 ? "HIT"
+                   : (recorded === 0 ? "MISS" : "PUSH");
+      var calLabel = calculated === 1 ? "HIT" : "MISS";
+
+      mismatches.push({
+        row:         i + 1,
+        pick:        pick,
+        actual:      String(actual),
+        sideCol:     sideCol,
+        sideParsed:  sideParsed,
+        recorded:    recLabel,
+        calculated:  calLabel,
+        outcomeRaw:  String(outcomeRaw || "")
+      });
+    }
+  }
+
+  // ── Report ──
+  Logger.log("===== SIDE OUTCOME AUDIT (PURE OUTRIGHT 1X2; TIE = LOSS) =====");
+  Logger.log(
+    "Checked: " + checked + " | Matched: " + matched +
+    " | Mismatches: " + mismatches.length + " | Skipped: " + skipped
+  );
+
+  if (checked > 0 && mismatches.length === 0) {
+    Logger.log(
+      "✅ All " + checked +
+      " outcomes match strict 1X2 outright-win logic. Source data is clean."
+    );
+  }
+
+  if (mismatches.length > 0) {
+    var errorRate = ((mismatches.length / checked) * 100).toFixed(1);
+    Logger.log("ERROR RATE: " + errorRate + "%");
+    Logger.log("");
+    Logger.log("Mismatches (first 25):");
+
+    for (var k = 0; k < Math.min(25, mismatches.length); k++) {
+      var m = mismatches[k];
+      Logger.log(
+        "  Row " + m.row +
+        ": " + m.pick +
+        " | Side: " + m.sideParsed +
+        " | Score: " + m.actual +
+        " | Recorded: " + m.recorded + " (" + m.outcomeRaw + ")" +
+        " | 1X2 check: " + m.calculated
+      );
+    }
+  }
+
+  return mismatches;
+}
 
