@@ -92,7 +92,7 @@ const Main_ = {
     
     // 10. Finish
     Log_.writeToSheet(ss);
-    SpreadsheetApp.getUi().alert("Assay Complete! Check the 'MA_Vault' tab.");
+    try { SpreadsheetApp.getUi().alert("Assay Complete! Check the 'MA_Vault' tab."); } catch(_) {}
     
   } catch (err) {
     Log_.error(`CRITICAL FAILURE: ${err.message}`, err.stack);
@@ -144,9 +144,18 @@ const Main_ = {
  * Standard Apps Script Entry Points
  */
 function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('⚗️ Ma Assayer')
-    .addItem('🚀 Run Full Assay', 'runAssay')
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('⚗️ Ma Assayer')
+    .addItem('🚀 Run Full Assay (Side+Totals only)', 'runAssay')
+    .addSeparator()
+    .addSubMenu(
+      ui.createMenu('🛰️ Fleet')
+        .addItem('📥 Import Accuracy_Reports + Run Full Assay', 'runFleetImportAndAssay')
+        .addItem('📥 Import Only (no assay)', 'runFleetImportOnly')
+        .addItem('🧪 Test Import (3 satellites)', 'runFleetImportTest')
+        .addSeparator()
+        .addItem('🔄 Reset Resume State', 'resetFleetImport')
+    )
     .addSeparator()
     .addItem('🚩 Refresh Flags Only', 'runFlagger')
     .addItem('🧹 Clear Logs', 'clearLogs')
