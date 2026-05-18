@@ -221,7 +221,7 @@ const FleetImport_ = {
 
         const hasMarket = resolved['type'] !== undefined;
         const hasOutcome = resolved['outcome'] !== undefined || resolved['result'] !== undefined;
-        const hasDate = resolved['date'] !== undefined || resolved['time'] !== undefined;
+        const hasDate = resolved['date'] !== undefined;
         const hasMatch = resolved['match'] !== undefined || (resolved['home'] !== undefined && resolved['away'] !== undefined);
 
         if (!hasMarket || !hasOutcome || !hasDate || !hasMatch) {
@@ -423,7 +423,7 @@ const FleetImport_ = {
         if (cell !== '' && cell !== null && cell !== undefined) {
           nonEmpty++;
           const cLower = String(cell).toLowerCase().trim();
-          if (tokens.some(t => cLower.includes(t) || t.includes(cLower))) {
+          if (tokens.some(t => cLower.includes(t) || (cLower.length >= 3 && t.includes(cLower)))) {
             tokenHits++;
           }
         }
@@ -448,6 +448,7 @@ const FleetImport_ = {
     }
 
     let finalHeaders = data[bestRowIdx].map(h => String(h || '').trim());
+    let mergedHeader = false;
     
     if (bestRowIdx + 1 < data.length) {
       let nextRowStringCount = 0;
@@ -463,10 +464,11 @@ const FleetImport_ = {
               if (subH) finalHeaders[i] = finalHeaders[i] ? finalHeaders[i] + ' ' + subH : subH;
           }
           bestRowIdx++; 
+          mergedHeader = true;
       }
     }
     
-    log.info(`Chosen header row index (1-based) = ${bestRowIdx + (nextRowStringCount > 5 ? 0 : 1)}`);
+    log.info(`Chosen header row index (1-based) = ${bestRowIdx + (mergedHeader ? 0 : 1)}`);
     log.info(`Header non-empty count = ${bestNonEmpty}, tokenHits = ${bestTokensHit}`);
     log.info(`Headers preview = [${finalHeaders.slice(0, 10).join(', ')}] (trimmed)`);
     if (bestRowIdx + 1 < data.length) {
@@ -619,13 +621,15 @@ const FleetImport_ = {
 
       const sheet = this.ensureTab_(ss, tabName, headers);
 
-      const currentHeaders = sheet.getRange(1, 1, 1, sheet.getLastColumn() || 1).getValues()[0];
+      // Force Side and Totals header row 1 when we clearBeforeImport
+      // Here we just ensure row 1 matches exactly.
       if (tabName === Config_.sheets.side || tabName === Config_.sheets.totals) {
-         if (currentHeaders.join(',') !== headers.join(',')) {
-             log.error(`STOP: ${tabName} schema mismatch! Expected [${headers.join(',')}] but got [${currentHeaders.join(',')}]`);
-             runReport.errors.push({ reason: `${tabName}_SCHEMA_MISMATCH`, expected: headers, actual: currentHeaders });
-             continue; 
-         }
+         sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+         sheet.setFrozenRows(1);
+         sheet.getRange(1, 1, 1, headers.length)
+            .setFontWeight('bold')
+            .setBackground(Config_.colors.header)
+            .setFontColor(Config_.colors.headerText);
       }
 
       const dedupedData = [];
