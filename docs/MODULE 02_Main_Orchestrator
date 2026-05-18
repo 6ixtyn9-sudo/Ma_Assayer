@@ -148,7 +148,7 @@ const Main_ = {
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('⚗️ Ma Assayer')
-    .addItem('🚀 Run Full Assay (Side+Totals only)', 'runAssay')
+    .addItem('🚀 Run Full Assay (All Markets)', 'runAssay')
     .addSeparator()
     .addSubMenu(
       ui.createMenu('🛰️ Fleet')

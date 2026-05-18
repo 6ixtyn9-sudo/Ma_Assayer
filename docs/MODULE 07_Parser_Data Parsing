@@ -1290,6 +1290,8 @@ function auditSideOutcomes() {
     const sheetSummaries = [];
     const skippedSheets = [];
     let totalSkippedRows = 0;
+    let womenIntakeCount = 0;
+    let menIntakeCount = 0;
 
     for (const sheet of intakeSheets) {
         const sheetName = sheet.getName();
@@ -1370,6 +1372,10 @@ function auditSideOutcomes() {
             // Quarter handling for Highest Quarter, etc. (we want it applied to full match = null)
             bet.quarter = null;
             
+            bet.isWomen = this.isWomenLeague(bet.league, bet.match);
+            if (bet.isWomen) womenIntakeCount++;
+            else menIntakeCount++;
+            
             bet.confidence = this.parseConfidence(this.getValue(row, resolved, "confidence"));
             bet.odds = this.parseOdds(this.getValue(row, resolved, "odds"));
             bet.units = this.getValue(row, resolved, "units");
@@ -1390,6 +1396,7 @@ function auditSideOutcomes() {
     }
 
     this.log.info(`Integrated Other markets into league purity: intakeSheets=${sheetSummaries.length} intakeBets=${allBets.length}`);
+    this.log.info(`Intake gender classification: ${womenIntakeCount} Women, ${menIntakeCount} Men`);
     Log_.sectionEnd("Parsing Intake Markets");
     
     return { bets: allBets, sheetSummaries, skippedSheets, skippedRows: totalSkippedRows };

@@ -390,10 +390,11 @@ const Stats_ = {
             tk && tk !== "null" && tk !== "undefined"
           );
 
-          if (distinctTypeKeys.length >= 2) {
+          if (distinctTypeKeys.length >= 2 || source === "Other") {
             for (const tk of distinctTypeKeys) {
               const tkBets = byTypeKey[tk];
-              if (!Array.isArray(tkBets) || tkBets.length < Config_.thresholds.minN) continue;
+              const minNReq = source === "Other" ? 1 : Config_.thresholds.minN;
+              if (!Array.isArray(tkBets) || tkBets.length < minNReq) continue;
 
               processSlice(tkBets, league, source, gender, tier, tk);
             }
