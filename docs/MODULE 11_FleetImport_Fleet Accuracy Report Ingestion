@@ -214,8 +214,22 @@ const FleetImport_ = {
         runReport.headerPatterns[headerPat] = (runReport.headerPatterns[headerPat] || 0) + 1;
 
         ColResolver_.init();
+        
+        // Merge Side + Totals aliases
+        const FLEET_ALIASES = {};
+        for (const k in Config_.sideColumnAliases) {
+          FLEET_ALIASES[k] = [...Config_.sideColumnAliases[k]];
+        }
+        for (const k in Config_.totalsColumnAliases) {
+          if (FLEET_ALIASES[k]) {
+            FLEET_ALIASES[k] = Array.from(new Set([...FLEET_ALIASES[k], ...Config_.totalsColumnAliases[k]]));
+          } else {
+            FLEET_ALIASES[k] = [...Config_.totalsColumnAliases[k]];
+          }
+        }
+
         const resolveResult = ColResolver_.resolve(
-          headers, Config_.sideColumnAliases, `AR_${sat.id.slice(0,8)}`
+          headers, FLEET_ALIASES, `AR_${sat.id.slice(0,8)}`
         );
         const resolved = resolveResult.resolved;
 
@@ -449,16 +463,13 @@ const FleetImport_ = {
 
     let finalHeaders = data[bestRowIdx].map(h => String(h || '').trim());
     let mergedHeader = false;
+    let mergeReason = 'None';
     
     if (bestRowIdx + 1 < data.length) {
-      let nextRowStringCount = 0;
       const nextRow = data[bestRowIdx + 1];
-      for (const cell of nextRow) {
-          if (cell !== '' && typeof cell === 'string' && isNaN(cell)) {
-              nextRowStringCount++;
-          }
-      }
-      if (nextRowStringCount > 5) { 
+      const mergeCheck = this.shouldMergeHeader_(data[bestRowIdx], nextRow, tokens, bestTokensHit);
+      
+      if (mergeCheck.merge) { 
           for (let i = 0; i < finalHeaders.length; i++) {
               const subH = String(nextRow[i] || '').trim();
               if (subH) finalHeaders[i] = finalHeaders[i] ? finalHeaders[i] + ' ' + subH : subH;
@@ -466,8 +477,10 @@ const FleetImport_ = {
           bestRowIdx++; 
           mergedHeader = true;
       }
+      mergeReason = mergeCheck.reason;
     }
     
+    log.info(`HeaderMerge: merged=${mergedHeader} (reason: ${mergeReason})`);
     log.info(`Chosen header row index (1-based) = ${bestRowIdx + (mergedHeader ? 0 : 1)}`);
     log.info(`Header non-empty count = ${bestNonEmpty}, tokenHits = ${bestTokensHit}`);
     log.info(`Headers preview = [${finalHeaders.slice(0, 10).join(', ')}] (trimmed)`);
@@ -479,6 +492,51 @@ const FleetImport_ = {
     const rows = fullData.slice(bestRowIdx + 1);
 
     return { headers: finalHeaders, rows: rows, headerIdx: bestRowIdx };
+  },
+
+  shouldMergeHeader_(headerRow, nextRow, tokens, headerRowTokenHits) {
+    if (headerRowTokenHits < 3) return { merge: false, reason: 'Header tokenHits < 3' };
+    
+    let numericLikeCount = 0;
+    let nextRowTokenHits = 0;
+    let blankInHeaderCount = 0;
+    let filledByNextRowCount = 0;
+    
+    const maxLen = Math.max(headerRow.length, nextRow.length);
+    for (let i = 0; i < maxLen; i++) {
+        const hCell = String(headerRow[i] || '').trim();
+        const nCell = String(nextRow[i] || '').trim();
+        
+        if (!hCell) {
+            blankInHeaderCount++;
+            if (nCell) filledByNextRowCount++;
+        }
+    }
+    
+    for (const cell of nextRow) {
+        if (cell === '' || cell === null || cell === undefined) continue;
+        const sCell = String(cell).trim();
+        const cLower = sCell.toLowerCase();
+        
+        let isNumLike = false;
+        if (!isNaN(sCell)) isNumLike = true; 
+        else if (/^[-+]?\d+$/.test(sCell)) isNumLike = true; 
+        else if (/\d{1,2}[-/]\d{1,2}/.test(sCell)) isNumLike = true; 
+        else if (/\d{1,2}:\d{2}/.test(sCell)) isNumLike = true; 
+        
+        if (isNumLike) {
+            numericLikeCount++;
+        } else if (tokens.some(t => cLower.includes(t) || (cLower.length >= 3 && t.includes(cLower)))) {
+            nextRowTokenHits++;
+        }
+    }
+    
+    if (numericLikeCount > 2) return { merge: false, reason: `numericLikeCount=${numericLikeCount} > 2` };
+    if (nextRowTokenHits < 2) return { merge: false, reason: `nextRowTokenHits=${nextRowTokenHits} < 2` };
+    if (blankInHeaderCount < 3) return { merge: false, reason: `blankInHeaderCount=${blankInHeaderCount} < 3` };
+    if (filledByNextRowCount < 2) return { merge: false, reason: `filledByNextRowCount=${filledByNextRowCount} < 2` };
+    
+    return { merge: true, reason: 'Met all criteria' };
   },
 
   // ─── Market routing ───────────────────────────────────────────────────────
