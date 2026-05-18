@@ -1,22 +1,14 @@
 // ============================================================================
 // MODULE: FleetImport_ — Fleet-wide Accuracy_Report Ingestion
-// VERSION: 1.0.0
+// VERSION: 1.1.0
 // ============================================================================
 //
 // ENTRY POINTS (menu-callable globals):
 //   runFleetImportAndAssay()      — import + run full assay
 //   runFleetImportOnly()          — import only (no assay)
+//   runFleetImportResume()        — resume import chunk
 //   runFleetImportTest()          — test run: first 3 satellites only
 //   resetFleetImport()            — clear all PropertiesService resume state
-//
-// ARCHITECTURE:
-//   FleetImport_.runFullAssayFromFleet()
-//   └─ FleetImport_.importAccuracyReports_()
-//      ├─ FleetImport_.discoverSatellites_()
-//      ├─ FleetImport_.readAccuracyReport_(id)
-//      ├─ FleetImport_.routeRowToMarket_(rowObj, resolved)
-//      ├─ FleetImport_.ensureTab_(ss, name, headers)
-//      └─ FleetImport_.clearStaleData_(sheet)
 //
 // ============================================================================
 
@@ -50,6 +42,14 @@ const FleetImport_ = {
     'confidence','ev','tier','type','odds','units','notes'
   ],
 
+  // OTHER dynamic tabs stable schema
+  OTHER_HEADERS: [
+    'SatelliteID', 'League', 'Date', 'Time', 'Home', 'Away', 'Match',
+    'Market', 'Period', 'Quarter', 'Pick', 'Direction', 'Line',
+    'Confidence', 'Tier', 'Odds', 'Units', 'EV',
+    'Outcome', 'Actual', 'Notes', 'SourceSheetId', 'SourceSheetName', 'ImportedAt'
+  ],
+
   // Market routing table — keyed on normalised type/market string fragments
   MARKET_MAP: {
     // ── SIDE ──
@@ -68,10 +68,6 @@ const FleetImport_ = {
 
   // ─── Public orchestrator ───────────────────────────────────────────────────
 
-  /**
-   * Full pipeline: import → assay.
-   * Called from menu "Fleet → Import + Run Full Assay".
-   */
   runFullAssayFromFleet(opts) {
     opts = opts || {};
     const log = Log_.module('FLEET_IMPORT');
@@ -83,9 +79,21 @@ const FleetImport_ = {
     const importOk = this.importAccuracyReports_(ss, opts, log);
 
     if (!importOk) {
-      log.error('Import failed — assay NOT started. See log above.');
+      log.error('Import failed or paused — assay NOT started. See log above.');
       Log_.writeToSheet(ss);
       return;
+    }
+
+    // Verify Side and Totals have data
+    const sideSheet = ss.getSheetByName(Config_.sheets.side);
+    const totalsSheet = ss.getSheetByName(Config_.sheets.totals);
+    const sideRows = sideSheet ? Math.max(0, sideSheet.getLastRow() - 1) : 0;
+    const totalsRows = totalsSheet ? Math.max(0, totalsSheet.getLastRow() - 1) : 0;
+
+    if (sideRows === 0 && totalsRows === 0) {
+       log.error('STOP: Zero rows in Side and Totals after import. Aborting assay.');
+       Log_.writeToSheet(ss);
+       return;
     }
 
     log.info('Import succeeded — launching Main_.runAssay()');
@@ -101,15 +109,10 @@ const FleetImport_ = {
 
   // ─── Core import ──────────────────────────────────────────────────────────
 
-  /**
-   * Chunked, resumable import of Accuracy_Report from all satellites.
-   * Returns true on success, false on hard failure.
-   */
   importAccuracyReports_(ss, opts, log) {
     opts = opts || {};
     log  = log  || Log_.module('FLEET_IMPORT');
 
-    // 1. Discover satellites
     const satellites = this.discoverSatellites_(log);
     if (!satellites || satellites.length === 0) {
       log.error('STOP: No satellites discovered. Cannot import.');
@@ -121,7 +124,6 @@ const FleetImport_ = {
     const total   = satList.length;
     log.info(`Satellites to process: ${total} (limit=${limit})`);
 
-    // 2. Resume state
     const props = PropertiesService.getScriptProperties();
     let startIdx = 0;
     if (opts.resume) {
@@ -133,12 +135,11 @@ const FleetImport_ = {
     }
     const runId = props.getProperty(this.PROP_RUN_ID) || 'UNKNOWN';
 
-    // 3. Accumulators — keyed by destTab name → array of row-arrays
     const buckets = {
-      [Config_.sheets.side]:   [],  // Side
-      [Config_.sheets.totals]: []   // Totals
-      // OTHER tabs added dynamically
+      [Config_.sheets.side]:   [],  
+      [Config_.sheets.totals]: []   
     };
+    
     const runReport = {
       runId,
       started:    new Date().toISOString(),
@@ -146,32 +147,36 @@ const FleetImport_ = {
       succeeded:  0,
       skipped:    0,
       missing_ar: 0,
+      headerFails: 0,
+      schemaFails: 0,
       rowsBySide:   0,
       rowsByTotals: 0,
       rowsByOther:  0,
+      weakKeys: 0,
       unknownMarkets: {},
-      errors: []
+      headerPatterns: {},
+      errors: [],
+      sampleHeaderRow: null,
+      sampleResolved: null
     };
 
-    // 4. Clear stale data BEFORE importing (idempotent safety)
-    if (!opts.resume) {
+    const clearBefore = opts.clearBeforeImport !== false;
+    if (!opts.resume && clearBefore) {
       this._clearIntakeTabs_(ss, log);
     }
 
-    // 5. Main loop — chunked
     const deadline = Date.now() + 270000; // 4.5 minutes
 
     for (let i = startIdx; i < satList.length; i++) {
 
-      // Time-limit guard
       if (Date.now() > deadline) {
-        log.warn(`Approaching 6-min limit at satellite ${i}. Saving resume state.`);
+        log.warn(`Approaching 4.5-min limit at satellite ${i}. Saving resume state.`);
         props.setProperty(this.PROP_RESUME_IDX, String(i));
         log.info('Run will auto-resume. Trigger setupOneTimeTrigger or re-run manually.');
         this._flushBuckets_(ss, buckets, log, runReport);
         this._writeRunReport_(ss, runReport, log);
         Log_.writeToSheet(ss);
-        return false; // caller should not start assay yet
+        return false; 
       }
 
       const sat = satList[i];
@@ -189,58 +194,123 @@ const FleetImport_ = {
           continue;
         }
 
-        const { headers, rows } = result;
-        log.info(`  → ${rows.length} data rows | headers: [${headers.slice(0,8).join(', ')}...]`);
+        const { headers, rows, headerIdx } = result;
+
+        if (headerIdx === -1) {
+           runReport.errors.push({ sat: sat.id, reason: 'HEADER_NOT_FOUND' });
+           runReport.headerFails++;
+           runReport.skipped++;
+           continue;
+        }
+
+        log.info(`  → ${rows.length} data rows`);
 
         if (rows.length === 0) {
           runReport.skipped++;
           continue;
         }
 
-        // Resolve columns once per satellite
+        const headerPat = headers.slice(0,10).join('|');
+        runReport.headerPatterns[headerPat] = (runReport.headerPatterns[headerPat] || 0) + 1;
+
         ColResolver_.init();
         const resolveResult = ColResolver_.resolve(
           headers, Config_.sideColumnAliases, `AR_${sat.id.slice(0,8)}`
         );
         const resolved = resolveResult.resolved;
 
-        if (resolveResult.missing.includes('league') && resolveResult.missing.includes('match')) {
-          log.warn(`  → COLUMN_RESOLUTION_FAILED sat=${sat.id} headers=[${headers.join(',')}]`);
-          runReport.errors.push({ sat: sat.id, reason: 'COLUMN_RESOLUTION_FAILED', headers });
+        const hasMarket = resolved['type'] !== undefined;
+        const hasOutcome = resolved['outcome'] !== undefined || resolved['result'] !== undefined;
+        const hasDate = resolved['date'] !== undefined || resolved['time'] !== undefined;
+        const hasMatch = resolved['match'] !== undefined || (resolved['home'] !== undefined && resolved['away'] !== undefined);
+
+        if (!hasMarket || !hasOutcome || !hasDate || !hasMatch) {
+          const missingCanons = [];
+          if (!hasMarket) missingCanons.push('market/type');
+          if (!hasOutcome) missingCanons.push('outcome/result');
+          if (!hasDate) missingCanons.push('date');
+          if (!hasMatch) missingCanons.push('match OR (home+away)');
+
+          log.warn(`  → COLUMN_RESOLUTION_FAILED sat=${sat.id}`);
+          log.warn(`      chosenHeaderRowIndex=${headerIdx + 1}`);
+          log.warn(`      headers=[${headers.join(',')}]`);
+          log.warn(`      missing=${missingCanons.join(',')}`);
+
+          runReport.errors.push({ sat: sat.id, reason: 'COLUMN_RESOLUTION_FAILED', missing: missingCanons, headers });
+          runReport.schemaFails++;
           runReport.skipped++;
           continue;
         }
 
-        // Route each row to a market bucket
+        if (runReport.succeeded === 0) {
+            runReport.sampleHeaderRow = headers;
+            runReport.sampleResolved = resolved;
+        }
+
+        const seenMarkets = new Set();
         let satSide = 0, satTotals = 0, satOther = 0;
+        let satSkippedBad = 0;
+
         for (let r = 0; r < rows.length; r++) {
           const raw = rows[r];
-          // Skip entirely blank rows
-          if (raw.every(c => c === '' || c === null || c === undefined)) continue;
+          if (raw.every(c => c === '' || c === null || c === undefined)) {
+             satSkippedBad++;
+             continue;
+          }
 
           const rowObj = this._buildRowObj_(raw, headers, resolved);
           rowObj.satellite_id   = sat.id;
           rowObj.satellite_name = sat.name;
 
-          const routing = this.routeRowToMarket_(rowObj, resolved);
+          const routing = this.routeRowToMarket_(rowObj);
+
+          const keyComps = [
+              sat.id,
+              rowObj.league || '',
+              rowObj.date || '',
+              rowObj.home || '',
+              rowObj.away || '',
+              rowObj.market || rowObj.type || '',
+              rowObj.quarter || rowObj.period || '',
+              rowObj.pick || '',
+              rowObj.line || '',
+              rowObj.direction || '',
+              rowObj.odds || ''
+          ];
+          const strongKey = keyComps.map(s => String(s).toUpperCase().trim()).join('|');
+          
+          let weakKey = false;
+          const meaningfulFields = keyComps.slice(1).filter(s => String(s).trim() !== '').length;
+          if (meaningfulFields < 3) {
+             weakKey = true;
+             runReport.weakKeys++;
+          }
+
+          const bucketItem = { key: strongKey, weak: weakKey };
 
           if (routing.assayGroup === 'SIDE') {
-            buckets[Config_.sheets.side].push(this._toSideRow_(rowObj));
+            bucketItem.data = this._toSideRow_(rowObj);
+            buckets[Config_.sheets.side].push(bucketItem);
             satSide++;
           } else if (routing.assayGroup === 'TOTALS') {
-            buckets[Config_.sheets.totals].push(this._toTotalsRow_(rowObj));
+            bucketItem.data = this._toTotalsRow_(rowObj);
+            buckets[Config_.sheets.totals].push(bucketItem);
             satTotals++;
           } else {
-            // OTHER — dynamic INTAKE__ tab
             if (!buckets[routing.destTab]) buckets[routing.destTab] = [];
-            buckets[routing.destTab].push(this._toOtherRow_(rowObj, headers));
+            bucketItem.data = this._toOtherRow_(rowObj);
+            buckets[routing.destTab].push(bucketItem);
             satOther++;
-            runReport.unknownMarkets[routing.market] =
-              (runReport.unknownMarkets[routing.market] || 0) + 1;
+            
+            if (!seenMarkets.has(routing.market)) {
+                seenMarkets.add(routing.market);
+                log.warn(`UNASSAYED_MARKET: ${routing.market} → ${routing.destTab}`);
+            }
+            runReport.unknownMarkets[routing.market] = (runReport.unknownMarkets[routing.market] || 0) + 1;
           }
         }
 
-        log.info(`  → Routed: SIDE=${satSide} TOTALS=${satTotals} OTHER=${satOther}`);
+        log.info(`  → Routed: SIDE=${satSide} TOTALS=${satTotals} OTHER=${satOther} SKIPPED_BLANK=${satSkippedBad}`);
         runReport.rowsBySide   += satSide;
         runReport.rowsByTotals += satTotals;
         runReport.rowsByOther  += satOther;
@@ -253,22 +323,17 @@ const FleetImport_ = {
       }
     }
 
-    // 6. Flush all buckets to sheets
     this._flushBuckets_(ss, buckets, log, runReport);
-
-    // 7. Write run report
     this._writeRunReport_(ss, runReport, log);
-
-    // 8. Clear resume state — run completed
     props.deleteProperty(this.PROP_RESUME_IDX);
 
     log.info('═══ FLEET IMPORT COMPLETE ═══');
     log.info(`Attempted=${runReport.attempted} Succeeded=${runReport.succeeded} Skipped=${runReport.skipped}`);
     log.info(`Rows: SIDE=${runReport.rowsBySide} TOTALS=${runReport.rowsByTotals} OTHER=${runReport.rowsByOther}`);
 
-    // STOP if no rows were routed at all
     if (runReport.rowsBySide === 0 && runReport.rowsByTotals === 0) {
-      log.error('STOP: Zero rows routed to Side or Totals. Check Accuracy_Report schema.');
+      log.error(`STOP: Zero rows routed to Side or Totals.`);
+      log.error(`Diagnostics: HeaderFails=${runReport.headerFails}, SchemaFails=${runReport.schemaFails}`);
       return false;
     }
 
@@ -277,14 +342,9 @@ const FleetImport_ = {
 
   // ─── Satellite discovery ──────────────────────────────────────────────────
 
-  /**
-   * Load satellite list from registry.json (GitHub raw).
-   * Falls back to Drive folder crawl if fetch fails.
-   */
   discoverSatellites_(log) {
     log = log || Log_.module('FLEET_DISCOVER');
     log.info('Discovering satellites from registry.json...');
-
     try {
       const resp = UrlFetchApp.fetch(this.REGISTRY_URL, { muteHttpExceptions: true });
       if (resp.getResponseCode() !== 200) throw new Error('HTTP ' + resp.getResponseCode());
@@ -292,7 +352,7 @@ const FleetImport_ = {
       const json = JSON.parse(resp.getContentText());
       const sats = json.satellites || [];
       log.info(`Registry: ${sats.length} satellites loaded.`);
-      return sats; // [{ id, name }]
+      return sats; 
     } catch (e) {
       log.warn('Registry fetch failed: ' + e.message + ' — falling back to Drive folder.');
       return this._discoverFromDrive_(log);
@@ -318,13 +378,8 @@ const FleetImport_ = {
 
   // ─── Read Accuracy_Report ─────────────────────────────────────────────────
 
-  /**
-   * Open satellite by ID, find Accuracy_Report tab, return { headers, rows }.
-   * Returns null if tab not found.
-   */
   readAccuracyReport_(satSheetId, log) {
     log = log || Log_.module('AR_READER');
-
     let sat;
     try {
       sat = SpreadsheetApp.openById(satSheetId);
@@ -333,7 +388,6 @@ const FleetImport_ = {
       return null;
     }
 
-    // Find the tab
     let arSheet = null;
     for (const alias of this.AR_TAB_ALIASES) {
       arSheet = sat.getSheetByName(alias);
@@ -341,35 +395,95 @@ const FleetImport_ = {
     }
     if (!arSheet) return null;
 
-    const data = arSheet.getDataRange().getValues();
-    if (data.length < 2) return { headers: data[0] || [], rows: [] };
+    const maxRows = Math.min(60, arSheet.getLastRow());
+    const maxCols = Math.min(80, arSheet.getLastColumn());
+    if (maxRows === 0 || maxCols === 0) return { headers: [], rows: [], headerIdx: -1 };
 
-    // Find header row (first row containing 'pick' or 'outcome' or 'league')
-    let headerIdx = 0;
-    for (let r = 0; r < Math.min(5, data.length); r++) {
-      const joined = data[r].join('|').toLowerCase();
-      if (joined.includes('pick') || joined.includes('outcome') || joined.includes('league')) {
-        headerIdx = r;
-        break;
+    const data = arSheet.getRange(1, 1, maxRows, maxCols).getValues();
+
+    const tokens = ['league', 'date', 'match', 'market', 'type', 'pick', 'outcome', 'odds', 'units', 'confidence', 'tier', 'quarter', 'period', 'home', 'away', 'line', 'over', 'under', 'result', 'actual', 'ev'];
+
+    let bestScore = -1;
+    let bestRowIdx = -1;
+    let bestTokensHit = 0;
+    let bestNonEmpty = 0;
+
+    for (let r = 0; r < data.length; r++) {
+      const row = data[r];
+      let nonEmpty = 0;
+      let tokenHits = 0;
+      let isBanner = false;
+
+      const joined = row.join('|').toLowerCase();
+      if (joined.includes('accuracy report') || joined.includes('golide')) {
+        isBanner = true;
+      }
+
+      for (const cell of row) {
+        if (cell !== '' && cell !== null && cell !== undefined) {
+          nonEmpty++;
+          const cLower = String(cell).toLowerCase().trim();
+          if (tokens.some(t => cLower.includes(t) || t.includes(cLower))) {
+            tokenHits++;
+          }
+        }
+      }
+
+      let score = (nonEmpty * 1) + (tokenHits * 3);
+      if (isBanner && tokenHits < 3) {
+        score -= 20; 
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestRowIdx = r;
+        bestTokensHit = tokenHits;
+        bestNonEmpty = nonEmpty;
       }
     }
 
-    return {
-      headers: data[headerIdx].map(h => String(h || '').trim()),
-      rows:    data.slice(headerIdx + 1)
-    };
+    if (bestRowIdx === -1 || bestNonEmpty < 6 || bestTokensHit < 3) {
+      log.warn(`HEADER_NOT_FOUND sat=${satSheetId} (best score=${bestScore}, bestIdx=${bestRowIdx}, nonEmpty=${bestNonEmpty}, hits=${bestTokensHit})`);
+      return { headers: [], rows: [], headerIdx: -1 };
+    }
+
+    let finalHeaders = data[bestRowIdx].map(h => String(h || '').trim());
+    
+    if (bestRowIdx + 1 < data.length) {
+      let nextRowStringCount = 0;
+      const nextRow = data[bestRowIdx + 1];
+      for (const cell of nextRow) {
+          if (cell !== '' && typeof cell === 'string' && isNaN(cell)) {
+              nextRowStringCount++;
+          }
+      }
+      if (nextRowStringCount > 5) { 
+          for (let i = 0; i < finalHeaders.length; i++) {
+              const subH = String(nextRow[i] || '').trim();
+              if (subH) finalHeaders[i] = finalHeaders[i] ? finalHeaders[i] + ' ' + subH : subH;
+          }
+          bestRowIdx++; 
+      }
+    }
+    
+    log.info(`Chosen header row index (1-based) = ${bestRowIdx + (nextRowStringCount > 5 ? 0 : 1)}`);
+    log.info(`Header non-empty count = ${bestNonEmpty}, tokenHits = ${bestTokensHit}`);
+    log.info(`Headers preview = [${finalHeaders.slice(0, 10).join(', ')}] (trimmed)`);
+    if (bestRowIdx + 1 < data.length) {
+       log.info(`First data row preview = [${data[bestRowIdx+1].slice(0, 10).join(', ')}]`);
+    }
+
+    const fullData = arSheet.getDataRange().getValues();
+    const rows = fullData.slice(bestRowIdx + 1);
+
+    return { headers: finalHeaders, rows: rows, headerIdx: bestRowIdx };
   },
 
   // ─── Market routing ───────────────────────────────────────────────────────
 
-  /**
-   * Returns { market, assayGroup, destTab }
-   * assayGroup: 'SIDE' | 'TOTALS' | 'OTHER'
-   */
   routeRowToMarket_(rowObj) {
     const rawType = String(rowObj.type || rowObj.market || '').toLowerCase().trim();
 
-    // Priority: check TOTALS first (OU patterns are specific)
     for (const frag of this.MARKET_MAP.TOTALS) {
       if (rawType.includes(frag)) {
         return { market: rawType, assayGroup: 'TOTALS', destTab: Config_.sheets.totals };
@@ -381,23 +495,17 @@ const FleetImport_ = {
       }
     }
 
-    // Unknown market — create INTAKE__ tab
     const sanitized = (rawType || 'unknown')
       .replace(/[^a-z0-9]/gi, '_')
       .replace(/_+/g, '_')
       .toUpperCase()
       .slice(0, 20);
     const destTab = this.MARKET_PREFIX + sanitized;
-    Log_.warn('UNASSAYED_MARKET: ' + rawType + ' → ' + destTab);
     return { market: rawType || 'UNKNOWN', assayGroup: 'OTHER', destTab };
   },
 
   // ─── Tab management ───────────────────────────────────────────────────────
 
-  /**
-   * Ensure a tab exists with the given headers (frozen row 1).
-   * Creates if missing. Does NOT clear existing data here.
-   */
   ensureTab_(ss, tabName, headerArray) {
     let sheet = ss.getSheetByName(tabName);
     if (!sheet) {
@@ -412,9 +520,6 @@ const FleetImport_ = {
     return sheet;
   },
 
-  /**
-   * Clear all data rows below header row 1.
-   */
   clearStaleData_(sheet) {
     const last = sheet.getLastRow();
     if (last > 1) sheet.deleteRows(2, last - 1);
@@ -423,7 +528,6 @@ const FleetImport_ = {
   // ─── Private helpers ─────────────────────────────────────────────────────
 
   _clearIntakeTabs_(ss, log) {
-    // Clear Side and Totals
     [Config_.sheets.side, Config_.sheets.totals].forEach(name => {
       const sh = ss.getSheetByName(name);
       if (sh) {
@@ -431,7 +535,6 @@ const FleetImport_ = {
         log.info('Cleared stale data: ' + name);
       }
     });
-    // Clear any existing INTAKE__ tabs
     ss.getSheets().forEach(sh => {
       if (sh.getName().startsWith(this.MARKET_PREFIX)) {
         this.clearStaleData_(sh);
@@ -442,12 +545,10 @@ const FleetImport_ = {
 
   _buildRowObj_(raw, headers, resolved) {
     const obj = {};
-    // Map by resolved canonical columns
     const get = (canon) => {
       const idx = resolved[canon];
       return (idx !== undefined && idx >= 0 && idx < raw.length) ? raw[idx] : '';
     };
-    // Canonical fields
     obj.league     = get('league');
     obj.date       = get('date');
     obj.time       = get('time');
@@ -456,10 +557,11 @@ const FleetImport_ = {
     obj.match      = get('match');
     obj.pick       = get('pick');
     obj.type       = get('type');
-    obj.market     = get('type'); // alias
+    obj.market     = get('type'); 
     obj.confidence = get('confidence');
     obj.tier       = get('tier');
     obj.quarter    = get('quarter');
+    obj.period     = get('quarter');
     obj.actual     = get('actual');
     obj.side       = get('side');
     obj.outcome    = get('outcome');
@@ -467,7 +569,6 @@ const FleetImport_ = {
     obj.units      = get('units');
     obj.ev         = get('ev');
     obj.notes      = get('notes');
-    // direction / line for totals
     obj.direction  = get('direction');
     obj.line       = get('line');
     obj.result     = get('result') || get('outcome');
@@ -495,49 +596,59 @@ const FleetImport_ = {
     ];
   },
 
-  _toOtherRow_(o, originalHeaders) {
-    // For OTHER markets, write a generic satellite_id + satellite_name + all original columns
-    return [o.satellite_id, o.satellite_name].concat(
-      originalHeaders.map(h => {
-        const key = String(h || '').toLowerCase().trim().replace(/\s+/g, '_');
-        return o[key] !== undefined ? o[key] : '';
-      })
-    );
+  _toOtherRow_(o) {
+    const importedAt = new Date().toISOString();
+    return [
+      o.satellite_id, o.league, o.date, o.time, o.home, o.away, o.match,
+      o.market || o.type, o.period || o.quarter, o.quarter, o.pick, o.direction, o.line,
+      o.confidence, o.tier, o.odds, o.units, o.ev,
+      o.outcome, o.actual, o.notes, o.satellite_id, o.satellite_name, importedAt
+    ];
   },
 
   _flushBuckets_(ss, buckets, log, runReport) {
-    const dedupKey = (row) => row.slice(0, 8).join('|'); // satellite+league+date+match+pick+type
     const seenKeys = {};
 
-    for (const [tabName, rows] of Object.entries(buckets)) {
-      if (rows.length === 0) continue;
+    for (const [tabName, items] of Object.entries(buckets)) {
+      if (items.length === 0) continue;
 
       let headers;
       if (tabName === Config_.sheets.side)   headers = this.SIDE_HEADERS;
       else if (tabName === Config_.sheets.totals) headers = this.TOTALS_HEADERS;
-      else headers = ['satellite_id','satellite_name'].concat(
-        // For dynamic tabs, use first row length to generate generic headers
-        Array.from({ length: Math.max(0, rows[0].length - 2) }, (_, i) => 'col_' + (i+1))
-      );
+      else headers = this.OTHER_HEADERS;
 
       const sheet = this.ensureTab_(ss, tabName, headers);
 
-      // Dedup within this flush
-      const deduped = [];
-      for (const row of rows) {
-        const k = tabName + '|' + dedupKey(row);
-        if (!seenKeys[k]) { seenKeys[k] = true; deduped.push(row); }
+      const currentHeaders = sheet.getRange(1, 1, 1, sheet.getLastColumn() || 1).getValues()[0];
+      if (tabName === Config_.sheets.side || tabName === Config_.sheets.totals) {
+         if (currentHeaders.join(',') !== headers.join(',')) {
+             log.error(`STOP: ${tabName} schema mismatch! Expected [${headers.join(',')}] but got [${currentHeaders.join(',')}]`);
+             runReport.errors.push({ reason: `${tabName}_SCHEMA_MISMATCH`, expected: headers, actual: currentHeaders });
+             continue; 
+         }
       }
 
-      if (deduped.length > 0) {
+      const dedupedData = [];
+      for (const item of items) {
+        if (item.weak) {
+            dedupedData.push(item.data);
+        } else {
+            const k = tabName + '|' + item.key;
+            if (!seenKeys[k]) { 
+                seenKeys[k] = true; 
+                dedupedData.push(item.data); 
+            }
+        }
+      }
+
+      if (dedupedData.length > 0) {
         const nextRow = sheet.getLastRow() + 1;
-        // Pad rows to header length
-        const padded = deduped.map(r => {
+        const padded = dedupedData.map(r => {
           while (r.length < headers.length) r.push('');
           return r.slice(0, headers.length);
         });
         sheet.getRange(nextRow, 1, padded.length, headers.length).setValues(padded);
-        log.info(`Flushed ${padded.length} rows → ${tabName}`);
+        log.info(`Flushed ${padded.length} rows (out of ${items.length} pre-dedupe) → ${tabName}`);
       }
     }
   },
@@ -550,12 +661,19 @@ const FleetImport_ = {
       sheet.getRange(1,1,1,2).setValues([['Field','Value']]);
       sheet.setFrozenRows(1);
     }
-    // Overwrite from row 2
     const lastR = sheet.getLastRow();
     if (lastR > 1) sheet.deleteRows(2, lastR - 1);
 
     const unknowns = Object.entries(report.unknownMarkets)
       .map(([m,n]) => m + ':' + n).join(', ') || 'none';
+
+    // Top 20 header patterns
+    const topHeaders = Object.entries(report.headerPatterns || {})
+        .sort((a,b) => b[1] - a[1])
+        .slice(0,20)
+        .map(([p, c]) => `${c}x: [${p}]`)
+        .join('
+');
 
     const rows = [
       ['run_id',         report.runId],
@@ -565,11 +683,17 @@ const FleetImport_ = {
       ['succeeded',      report.succeeded],
       ['skipped',        report.skipped],
       ['missing_ar',     report.missing_ar],
+      ['header_fails',   report.headerFails],
+      ['schema_fails',   report.schemaFails],
       ['rows_side',      report.rowsBySide],
       ['rows_totals',    report.rowsByTotals],
       ['rows_other',     report.rowsByOther],
+      ['weak_keys',      report.weakKeys],
       ['unknown_markets',unknowns],
-      ['errors',         report.errors.length],
+      ['top_header_pats',topHeaders],
+      ['sample_headers', JSON.stringify(report.sampleHeaderRow || [])],
+      ['sample_resolved',JSON.stringify(report.sampleResolved || {})],
+      ['errors_count',   report.errors.length],
       ['error_detail',   JSON.stringify(report.errors).slice(0, 1000)]
     ];
 
@@ -583,13 +707,20 @@ const FleetImport_ = {
 // ============================================================================
 
 function runFleetImportAndAssay() {
-  FleetImport_.runFullAssayFromFleet();
+  FleetImport_.runFullAssayFromFleet({ clearBeforeImport: true });
 }
 
 function runFleetImportOnly() {
   Log_.init();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  FleetImport_.importAccuracyReports_(ss, {}, Log_.module('FLEET_IMPORT'));
+  FleetImport_.importAccuracyReports_(ss, { clearBeforeImport: true }, Log_.module('FLEET_IMPORT'));
+  Log_.writeToSheet(ss);
+}
+
+function runFleetImportResume() {
+  Log_.init();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  FleetImport_.importAccuracyReports_(ss, { resume: true }, Log_.module('FLEET_IMPORT'));
   Log_.writeToSheet(ss);
 }
 
@@ -598,7 +729,7 @@ function runFleetImportTest() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const log = Log_.module('FLEET_IMPORT_TEST');
   log.info('TEST RUN — limit=3 satellites');
-  FleetImport_.importAccuracyReports_(ss, { limit: 3 }, log);
+  FleetImport_.importAccuracyReports_(ss, { limit: 3, clearBeforeImport: true }, log);
   Log_.writeToSheet(ss);
 }
 
