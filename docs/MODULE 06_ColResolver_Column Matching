@@ -94,10 +94,16 @@ const ColResolver_ = {
     // Empty strings
     if (!n1 || !n2) return 0;
     
-    // One contains the other completely
+    // One contains the other completely — only award containment score if
+    // the shorter string is meaningful (≥4 chars) to prevent short tokens
+    // like "ev" from falsely matching inside long aliases like "event time".
     if (n1.includes(n2) || n2.includes(n1)) {
-      const ratio = Math.min(n1.length, n2.length) / Math.max(n1.length, n2.length);
-      return 0.85 + (ratio * 0.15);
+      const shorter = Math.min(n1.length, n2.length);
+      if (shorter >= 4) {
+        const ratio = shorter / Math.max(n1.length, n2.length);
+        return 0.85 + (ratio * 0.15);
+      }
+      // Short token: fall through to Levenshtein scoring
     }
     
     // Word-based matching

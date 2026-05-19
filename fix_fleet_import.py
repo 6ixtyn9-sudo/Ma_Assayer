@@ -1,4 +1,6 @@
-// ============================================================================
+import json
+
+file_content = """// ============================================================================
 // MODULE: FleetImport_ — Fleet-wide Accuracy_Report Ingestion
 // VERSION: 1.1.0
 // ============================================================================
@@ -62,10 +64,7 @@ const FleetImport_ = {
     TOTALS: [
       'over','under','o/u','ou','total','sniper o','sniper u',
       'quarter o','quarter u','1q o','2q o','3q o','4q o',
-      'half o','half u','full time ou','ft ou','ht ou',
-      // ◆ PATCH: High-Quarter market variants
-      'sniper high qtr','sniper_high_qtr','high quarter',
-      'highest quarter','highest scoring quarter','high qtr'
+      'half o','half u','full time ou','ft ou','ht ou'
     ]
   },
 
@@ -217,28 +216,14 @@ const FleetImport_ = {
         runReport.headerPatterns[headerPat] = (runReport.headerPatterns[headerPat] || 0) + 1;
 
         ColResolver_.init();
-        
-        // Merge Side + Totals aliases
-        const FLEET_ALIASES = {};
-        for (const k in Config_.sideColumnAliases) {
-          FLEET_ALIASES[k] = [...Config_.sideColumnAliases[k]];
-        }
-        for (const k in Config_.totalsColumnAliases) {
-          if (FLEET_ALIASES[k]) {
-            FLEET_ALIASES[k] = Array.from(new Set([...FLEET_ALIASES[k], ...Config_.totalsColumnAliases[k]]));
-          } else {
-            FLEET_ALIASES[k] = [...Config_.totalsColumnAliases[k]];
-          }
-        }
-
         const resolveResult = ColResolver_.resolve(
-          headers, FLEET_ALIASES, `AR_${sat.id.slice(0,8)}`
+          headers, Config_.sideColumnAliases, `AR_${sat.id.slice(0,8)}`
         );
         const resolved = resolveResult.resolved;
 
         const hasMarket = resolved['type'] !== undefined;
         const hasOutcome = resolved['outcome'] !== undefined || resolved['result'] !== undefined;
-        const hasDate = resolved['date'] !== undefined;
+        const hasDate = resolved['date'] !== undefined || resolved['time'] !== undefined;
         const hasMatch = resolved['match'] !== undefined || (resolved['home'] !== undefined && resolved['away'] !== undefined);
 
         if (!hasMarket || !hasOutcome || !hasDate || !hasMatch) {
@@ -274,24 +259,6 @@ const FleetImport_ = {
              satSkippedBad++;
              continue;
           }
-
-          // ◆ PATCH: Skip banner/log/summary rows that are not real bet records.
-          // These come from the satellite's internal reporting sections
-          // (e.g. "═══ SNIPER O/U ═══", "Source sheet: Bet_Slips", "Total bets found: 6", etc.)
-          const firstNonEmpty = raw.find(c => c !== '' && c !== null && c !== undefined);
-          const firstStr = String(firstNonEmpty || '').trim();
-          const isBannerRow = firstStr.startsWith('═') || firstStr.startsWith('---') ||
-                              /^(source sheet|total bets|matched to|hits?:|misses?:|pushes|hit rate|metric|raw log|unique pred|\(no match)/i.test(firstStr);
-          if (isBannerRow) { satSkippedBad++; continue; }
-
-          // ◆ PATCH: Skip rows where the raw type cell echoes a column header
-          // (the header row itself captured as a data row).
-          const typeColIdx = resolved['type'];
-          const rawTypeCell = (typeColIdx !== undefined && typeColIdx >= 0 && typeColIdx < raw.length)
-            ? String(raw[typeColIdx] || '').trim().toLowerCase()
-            : '';
-          const isHeaderEcho = rawTypeCell === 'type' || rawTypeCell === 'market' || rawTypeCell === 'bet type';
-          if (isHeaderEcho) { satSkippedBad++; continue; }
 
           const rowObj = this._buildRowObj_(raw, headers, resolved);
           rowObj.satellite_id   = sat.id;
@@ -458,7 +425,7 @@ const FleetImport_ = {
         if (cell !== '' && cell !== null && cell !== undefined) {
           nonEmpty++;
           const cLower = String(cell).toLowerCase().trim();
-          if (tokens.some(t => cLower.includes(t) || (cLower.length >= 3 && t.includes(cLower)))) {
+          if (tokens.some(t => cLower.includes(t) || t.includes(cLower))) {
             tokenHits++;
           }
         }
@@ -483,26 +450,25 @@ const FleetImport_ = {
     }
 
     let finalHeaders = data[bestRowIdx].map(h => String(h || '').trim());
-    let mergedHeader = false;
-    let mergeReason = 'None';
     
     if (bestRowIdx + 1 < data.length) {
+      let nextRowStringCount = 0;
       const nextRow = data[bestRowIdx + 1];
-      const mergeCheck = this.shouldMergeHeader_(data[bestRowIdx], nextRow, tokens, bestTokensHit);
-      
-      if (mergeCheck.merge) { 
+      for (const cell of nextRow) {
+          if (cell !== '' && typeof cell === 'string' && isNaN(cell)) {
+              nextRowStringCount++;
+          }
+      }
+      if (nextRowStringCount > 5) { 
           for (let i = 0; i < finalHeaders.length; i++) {
               const subH = String(nextRow[i] || '').trim();
               if (subH) finalHeaders[i] = finalHeaders[i] ? finalHeaders[i] + ' ' + subH : subH;
           }
           bestRowIdx++; 
-          mergedHeader = true;
       }
-      mergeReason = mergeCheck.reason;
     }
     
-    log.info(`HeaderMerge: merged=${mergedHeader} (reason: ${mergeReason})`);
-    log.info(`Chosen header row index (1-based) = ${bestRowIdx + (mergedHeader ? 0 : 1)}`);
+    log.info(`Chosen header row index (1-based) = ${bestRowIdx + (nextRowStringCount > 5 ? 0 : 1)}`);
     log.info(`Header non-empty count = ${bestNonEmpty}, tokenHits = ${bestTokensHit}`);
     log.info(`Headers preview = [${finalHeaders.slice(0, 10).join(', ')}] (trimmed)`);
     if (bestRowIdx + 1 < data.length) {
@@ -515,66 +481,18 @@ const FleetImport_ = {
     return { headers: finalHeaders, rows: rows, headerIdx: bestRowIdx };
   },
 
-  shouldMergeHeader_(headerRow, nextRow, tokens, headerRowTokenHits) {
-    if (headerRowTokenHits < 3) return { merge: false, reason: 'Header tokenHits < 3' };
-    
-    let numericLikeCount = 0;
-    let nextRowTokenHits = 0;
-    let blankInHeaderCount = 0;
-    let filledByNextRowCount = 0;
-    
-    const maxLen = Math.max(headerRow.length, nextRow.length);
-    for (let i = 0; i < maxLen; i++) {
-        const hCell = String(headerRow[i] || '').trim();
-        const nCell = String(nextRow[i] || '').trim();
-        
-        if (!hCell) {
-            blankInHeaderCount++;
-            if (nCell) filledByNextRowCount++;
-        }
-    }
-    
-    for (const cell of nextRow) {
-        if (cell === '' || cell === null || cell === undefined) continue;
-        const sCell = String(cell).trim();
-        const cLower = sCell.toLowerCase();
-        
-        let isNumLike = false;
-        if (!isNaN(sCell)) isNumLike = true; 
-        else if (/^[-+]?\d+$/.test(sCell)) isNumLike = true; 
-        else if (/\d{1,2}[-/]\d{1,2}/.test(sCell)) isNumLike = true; 
-        else if (/\d{1,2}:\d{2}/.test(sCell)) isNumLike = true; 
-        
-        if (isNumLike) {
-            numericLikeCount++;
-        } else if (tokens.some(t => cLower.includes(t) || (cLower.length >= 3 && t.includes(cLower)))) {
-            nextRowTokenHits++;
-        }
-    }
-    
-    if (numericLikeCount > 2) return { merge: false, reason: `numericLikeCount=${numericLikeCount} > 2` };
-    if (nextRowTokenHits < 2) return { merge: false, reason: `nextRowTokenHits=${nextRowTokenHits} < 2` };
-    if (blankInHeaderCount < 3) return { merge: false, reason: `blankInHeaderCount=${blankInHeaderCount} < 3` };
-    if (filledByNextRowCount < 2) return { merge: false, reason: `filledByNextRowCount=${filledByNextRowCount} < 2` };
-    
-    return { merge: true, reason: 'Met all criteria' };
-  },
-
   // ─── Market routing ───────────────────────────────────────────────────────
 
   routeRowToMarket_(rowObj) {
     const rawType = String(rowObj.type || rowObj.market || '').toLowerCase().trim();
-    // ◆ PATCH: also normalize underscores/hyphens → spaces for fragment matching
-    // so e.g. "sniper_ou" matches "sniper o", "1h_1x2" matches "1x2".
-    const normType = rawType.replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
 
     for (const frag of this.MARKET_MAP.TOTALS) {
-      if (rawType.includes(frag) || normType.includes(frag)) {
+      if (rawType.includes(frag)) {
         return { market: rawType, assayGroup: 'TOTALS', destTab: Config_.sheets.totals };
       }
     }
     for (const frag of this.MARKET_MAP.SIDE) {
-      if (rawType.includes(frag) || normType.includes(frag)) {
+      if (rawType.includes(frag)) {
         return { market: rawType, assayGroup: 'SIDE', destTab: Config_.sheets.side };
       }
     }
@@ -703,15 +621,13 @@ const FleetImport_ = {
 
       const sheet = this.ensureTab_(ss, tabName, headers);
 
-      // Force Side and Totals header row 1 when we clearBeforeImport
-      // Here we just ensure row 1 matches exactly.
+      const currentHeaders = sheet.getRange(1, 1, 1, sheet.getLastColumn() || 1).getValues()[0];
       if (tabName === Config_.sheets.side || tabName === Config_.sheets.totals) {
-         sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-         sheet.setFrozenRows(1);
-         sheet.getRange(1, 1, 1, headers.length)
-            .setFontWeight('bold')
-            .setBackground(Config_.colors.header)
-            .setFontColor(Config_.colors.headerText);
+         if (currentHeaders.join(',') !== headers.join(',')) {
+             log.error(`STOP: ${tabName} schema mismatch! Expected [${headers.join(',')}] but got [${currentHeaders.join(',')}]`);
+             runReport.errors.push({ reason: `${tabName}_SCHEMA_MISMATCH`, expected: headers, actual: currentHeaders });
+             continue; 
+         }
       }
 
       const dedupedData = [];
@@ -758,7 +674,7 @@ const FleetImport_ = {
         .sort((a,b) => b[1] - a[1])
         .slice(0,20)
         .map(([p, c]) => `${c}x: [${p}]`)
-        .join('\\n');
+        .join('\n');
 
     const rows = [
       ['run_id',         report.runId],
@@ -824,3 +740,9 @@ function resetFleetImport() {
   props.deleteProperty(FleetImport_.PROP_RUN_ID);
   Logger.log('FleetImport resume state cleared.');
 }
+"""
+
+with open("/Users/apple/Desktop/gold-universe-orchestrator/Ma_Assayer/docs/MODULE 11_FleetImport_Fleet Accuracy Report Ingestion", "w") as f:
+    f.write(file_content)
+
+print("Done writing to file.")

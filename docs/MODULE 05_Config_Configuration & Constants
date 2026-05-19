@@ -88,11 +88,11 @@ const Config_ = {
     ],
     date: [
       "date", "dt", "dte", "game date", "gamedate", "match date", "event date",
-      "play date", "playdate", "bet date", "betdate", "event"
+      "play date", "playdate", "bet date", "betdate"
     ],
     time: [
       "time", "tm", "start time", "starttime", "game time", "kickoff",
-      "tip off", "tipoff", "start", "event time"
+      "tip off", "tipoff", "start"
     ],
     match: [
       "match", "game", "matchup", "teams", "mch", "mtch", "fixture", "vs",
