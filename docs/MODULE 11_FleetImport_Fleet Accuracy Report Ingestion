@@ -680,6 +680,25 @@ function runFleetImportOnly() {
   Log_.writeToSheet(ss);
 }
 
+function runFleetImportAndAssay() {
+  Log_.init();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const log = Log_.module('FLEET_IMPORT');
+  
+  PropertiesService.getScriptProperties().setProperty('FI_CHAIN_ASSAY', 'true');
+  
+  const done = FleetImport_.importAccuracyReports_(ss, { clearBeforeImport: true }, log);
+  if (done !== false) {
+    PropertiesService.getScriptProperties().deleteProperty('FI_CHAIN_ASSAY');
+    log.info('Fleet import finished synchronously. Triggering Main_.runAssay()...');
+    Log_.writeToSheet(ss);
+    Main_.runAssay();
+  } else {
+    log.info('Fleet import paused for quota. Main_.runAssay() will execute upon final resume completion.');
+    Log_.writeToSheet(ss);
+  }
+}
+
 function runFleetImportTest() {
   Log_.init();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -699,6 +718,16 @@ function runFleetImportResume() {
   if (done !== false) {
     // Completed — cancel any leftover timer
     FleetImport_._cancelResumeTimer_();
+    
+    // Check if we need to chain into runAssay
+    const props = PropertiesService.getScriptProperties();
+    if (props.getProperty('FI_CHAIN_ASSAY') === 'true') {
+      props.deleteProperty('FI_CHAIN_ASSAY');
+      log.info('Fleet import finished on resume. Triggering Main_.runAssay()...');
+      Log_.writeToSheet(ss);
+      Main_.runAssay();
+      return;
+    }
   }
   Log_.writeToSheet(ss);
 }
