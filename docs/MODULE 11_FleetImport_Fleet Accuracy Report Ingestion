@@ -317,7 +317,7 @@ const FleetImport_ = {
       date:           get('date'),
       match:          get('match'),
       pick:           get('pick'),
-      type:           get('type'),
+      type:           this._typeToTab_(get('type')),
       quarter:        get('quarter'),
       direction:      get('direction'),
       line:           get('line'),
