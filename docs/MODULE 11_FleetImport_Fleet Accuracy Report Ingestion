@@ -987,7 +987,10 @@ const FleetImport_ = {
             correct:  isFinite(Number(row.correct)) ? Number(row.correct) : null,
             total:    isFinite(Number(row.total))   ? Number(row.total)   : null
           };
-        }).filter(function(r) { return r.league; });
+        }).filter(function(r) {
+          // Skip blank rows and header-sentinel rows (when anchor == header row)
+          return r.league && r.league.toLowerCase() !== 'league';
+        });
         // Cap at 30 leagues for size safety
         if (result.winnerAccuracyByLeague.length > 30)
           result.winnerAccuracyByLeague = result.winnerAccuracyByLeague.slice(0, 30);
@@ -1011,7 +1014,10 @@ const FleetImport_ = {
             correct:  isFinite(Number(row.correct)) ? Number(row.correct) : null,
             total:    isFinite(Number(row.total))   ? Number(row.total)   : null
           };
-        }).filter(function(r) { return r.range; });
+        }).filter(function(r) {
+          // Skip blank rows and header-sentinel rows
+          return r.range && r.range.toLowerCase() !== 'range';
+        });
       }
     }
 
