@@ -95,7 +95,9 @@ const FleetImport_ = {
     // buckets: { 'BANKER': [ {key, data}, … ], 'SNIPER_OU': [...], … }
     const buckets = {};
 
-    if (!opts.resume && opts.clearBeforeImport !== false) {
+    // Clear on fresh run OR when resume restarts from 0 (no prior chunks)
+    const isGenuineResume = opts.resume && startIdx > 0;
+    if (!isGenuineResume && opts.clearBeforeImport !== false) {
       this._clearIntakeTabs_(ss, log);
     }
 
@@ -242,6 +244,39 @@ const FleetImport_ = {
 
   // ─── Type → tab name ──────────────────────────────────────────────────────
 
+  // Canonical aliases: maps sanitized variants → canonical sheet name.
+  // Add here whenever a new alias sheet appears in the report.
+  TYPE_CANONICAL: {
+    // Sniper O/U family
+    'SNIPER_O_U':          'SNIPER_OU',
+    'SNIPER_O_U_STAR':     'SNIPER_OU',
+    'SNIPER_OU_STAR':      'SNIPER_OU',
+    'SNIPER_O_U_DIR':      'SNIPER_OU',
+    'SNIPER_OU_DIR':       'SNIPER_OU',
+    'SNIPER_OVER_UNDER':   'SNIPER_OU',
+    // FT O/U family
+    'FT_O_U':              'FT_O_U',
+    'FT_OU':               'FT_O_U',
+    'FULL_TIME_O_U':       'FT_O_U',
+    'FULL_TIME_OU':        'FT_O_U',
+    // HT O/U family
+    'HT_OU':               'HT_O_U',
+    'HT_O_U':              'HT_O_U',
+    'HALF_TIME_OU':        'HT_O_U',
+    // 1X2 family
+    '1X2':                 '1X2',
+    'FT_1X2':              '1X2',
+    '1H_1X2':              '1H_1X2',
+    'FIRST_HALF_1X2':      '1H_1X2',
+    // Sniper High Qtr family
+    'SNIPER_HIGH_QTR':     'SNIPER_HIGH_QTR',
+    'SNIPER_HIGH_QUARTER': 'SNIPER_HIGH_QTR',
+    'HIGHEST_QTR':         'SNIPER_HIGH_QTR',
+    'HIGHEST_QUARTER':     'SNIPER_HIGH_QTR',
+    'HIGH_QUARTER':        'SNIPER_HIGH_QTR',
+    'HIGH_QTR':            'SNIPER_HIGH_QTR',
+  },
+
   _typeToTab_(rawType) {
     const s = String(rawType || 'UNKNOWN').trim();
     if (!s) return 'UNKNOWN';
@@ -251,8 +286,11 @@ const FleetImport_ = {
       .replace(/_+/g, '_')
       .replace(/^_|_$/g, '')
       .slice(0, 25);
-    return sanitized || 'UNKNOWN';
+    const key = sanitized || 'UNKNOWN';
+    // Collapse known variants to canonical sheet name
+    return this.TYPE_CANONICAL[key] || key;
   },
+
 
   // ─── Build universal row object ───────────────────────────────────────────
 
