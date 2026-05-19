@@ -195,7 +195,7 @@ const FleetImport_ = {
           if (
             firstStr.startsWith('═') ||
             firstStr.startsWith('---') ||
-            /^(source sheet|total bets|matched to|hits?:|misses?:|pushes|hit rate|metric|raw log|unique pred|\(no match)/i.test(firstStr) ||
+            /^(source sheet|total bets|matched to|hits?:|misses?:|pushes|hit rate|metric|raw log|unique pred|\(no match\))/i.test(firstStr) ||
             fullRowStr.includes('source sheet:') ||
             fullRowStr.includes('--- bet details ---') ||
             fullRowStr.includes('═══')
