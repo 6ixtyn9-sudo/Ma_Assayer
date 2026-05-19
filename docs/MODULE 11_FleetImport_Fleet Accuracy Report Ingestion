@@ -299,6 +299,60 @@ const FleetImport_ = {
   },
 
 
+  // ─── Field normalizers ────────────────────────────────────────────────────
+
+  // Confidence: "● (62%) ○" | "★ (95%) ★" | "82%" | "82" → "82"
+  _normalizeConfidence_(raw) {
+    if (!raw) return '';
+    // Extract first number (integer or decimal) from the string
+    const m = String(raw).match(/(\d+(?:\.\d+)?)/);
+    return m ? m[1] : String(raw).trim();
+  },
+
+  // Date: "15/01/2026" | "01/15/2026" | "2026-01-15" | "Jan 15, 2026" → "YYYY-MM-DD"
+  _normalizeDate_(raw) {
+    if (!raw) return '';
+    const s = String(raw).trim();
+    // Already ISO
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    // DD/MM/YYYY or MM/DD/YYYY — heuristic: first part >12 means it must be DD
+    const slashParts = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
+    if (slashParts) {
+      const [, a, b, y] = slashParts;
+      const firstIsDay = parseInt(a, 10) > 12;
+      const dd = (firstIsDay ? a : b).padStart(2, '0');
+      const mm = (firstIsDay ? b : a).padStart(2, '0');
+      return y + '-' + mm + '-' + dd;
+    }
+    // Try native Date parse as fallback
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    return s;
+  },
+
+  // Outcome: "✅ HIT" | "WIN" | "W" → "HIT" | "❌ MISS" | "LOSE" → "MISS" | "🟡 PUSH" → "PUSH"
+  _normalizeOutcome_(raw) {
+    if (!raw) return '';
+    // Strip emoji/symbols, normalize win/loss variants
+    const s = String(raw).replace(/[^\w\s]/g, '').trim().toUpperCase();
+    if (/^HIT|^WIN/.test(s) || s === 'W') return 'HIT';
+    if (/^MISS|^LOSS|^LOSE/.test(s) || s === 'L') return 'MISS';
+    if (/^PUSH|^VOID|^REFUND/.test(s)) return 'PUSH';
+    return String(raw).trim();
+  },
+
+  // Track raw unknown types for auditing (stored in script property as JSON)
+  PROP_UNKNOWN_TYPES: 'FI_UNKNOWN_TYPES',
+  _trackUnknownType_(rawType) {
+    if (!rawType || rawType === 'UNKNOWN') return;
+    try {
+      const props = PropertiesService.getScriptProperties();
+      const stored = JSON.parse(props.getProperty(this.PROP_UNKNOWN_TYPES) || '{}');
+      stored[rawType] = (stored[rawType] || 0) + 1;
+      props.setProperty(this.PROP_UNKNOWN_TYPES, JSON.stringify(stored));
+    } catch(e) { /* non-critical */ }
+  },
+
   // ─── Build universal row object ───────────────────────────────────────────
 
   _buildRowObj_(raw, resolved, sat) {
@@ -317,21 +371,25 @@ const FleetImport_ = {
       if (m) { home = m[1].trim(); away = m[2].trim(); }
     }
 
+    const rawType     = get('type');
+    const canonType   = this._typeToTab_(rawType);
+    if (canonType === 'UNKNOWN') this._trackUnknownType_(rawType);
+
     return {
       satellite_id:   sat.id,
       satellite_name: sat.name,
       league:         get('league'),
-      date:           get('date'),
+      date:           this._normalizeDate_(get('date')),
       match:          get('match'),
       pick:           get('pick'),
-      type:           this._typeToTab_(get('type')),
+      type:           canonType,
       quarter:        get('quarter'),
       direction:      get('direction'),
       line:           get('line'),
-      confidence:     get('confidence'),
+      confidence:     this._normalizeConfidence_(get('confidence')),
       tier:           get('tier'),
       odds:           get('odds'),
-      outcome:        get('outcome') || get('result'),
+      outcome:        this._normalizeOutcome_(get('outcome') || get('result')),
       actual:         get('actual'),
       home,
       away,
@@ -680,33 +738,26 @@ function clearAllIntakeData() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function auditUnknownTypes() {
-  const ss    = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName('UNKNOWN');
-  if (!sheet) { Logger.log('No UNKNOWN sheet found.'); return; }
-
-  const data = sheet.getDataRange().getValues();
-  if (data.length < 2) { Logger.log('UNKNOWN sheet is empty.'); return; }
-
-  const headers = data[0].map(h => String(h).toLowerCase().trim());
-  const typeCol = headers.indexOf('type');
-  if (typeCol === -1) { Logger.log('No "type" column found.'); return; }
-
-  const counts = {};
-  for (let r = 1; r < data.length; r++) {
-    const val = String(data[r][typeCol] || '').trim();
-    if (val) counts[val] = (counts[val] || 0) + 1;
+  // Reads the raw-type tracker built during import (not the sheet)
+  // so you see the ORIGINAL satellite type strings, not "UNKNOWN"
+  const props = PropertiesService.getScriptProperties();
+  const stored = props.getProperty(FleetImport_.PROP_UNKNOWN_TYPES);
+  if (!stored) {
+    Logger.log('No unknown type data recorded yet. Run a fleet import first.');
+    return;
   }
-
+  const counts = JSON.parse(stored);
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const total  = sorted.reduce((s, [,n]) => s + n, 0);
 
-  Logger.log('==== UNKNOWN type audit (' + (data.length - 1) + ' rows, ' + sorted.length + ' unique types) ====');
+  Logger.log('==== UNKNOWN raw type audit (' + total + ' rows, ' + sorted.length + ' unique types) ====');
   sorted.forEach(function([type, n]) {
     const sanitized = type.toUpperCase()
       .replace(/[^A-Z0-9]/g, '_')
       .replace(/_+/g, '_')
       .replace(/^_|_$/g, '')
       .slice(0, 25);
-    Logger.log('  ' + String(n).padStart(4) + 'x  "' + type + '"  =>  "' + sanitized + '"');
+    Logger.log('  ' + String(n).padStart(4) + 'x  "' + type + '"  =>  sanitized: "' + sanitized + '"');
   });
-  Logger.log('==== End of audit ====');
+  Logger.log('==== Paste the sanitized keys into TYPE_CANONICAL to resolve. ====');
 }
