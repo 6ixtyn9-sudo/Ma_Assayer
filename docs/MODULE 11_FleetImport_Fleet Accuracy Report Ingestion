@@ -59,227 +59,264 @@ const FleetImport_ = {
     opts = opts || {};
     log  = log  || Log_.module('FLEET_IMPORT');
 
-    const satellites = this.discoverSatellites_(log);
-    if (!satellites || satellites.length === 0) {
-      log.error('No satellites discovered.');
-      return false;
-    }
-
-    const limit   = opts.limit || satellites.length;
-    const satList = satellites.slice(0, limit);
-    const total   = satList.length;
-    log.info(`Satellites to process: ${total} (limit=${limit})`);
-
-    const props = PropertiesService.getScriptProperties();
-    let startIdx = 0;
-    if (opts.resume) {
-      startIdx = parseInt(props.getProperty(this.PROP_RESUME_IDX) || '0', 10);
-      // If already complete, bail out cleanly — do not overwrite the report
-      if (startIdx >= satList.length) {
-        log.info('Fleet import already complete — nothing to resume.');
-        props.deleteProperty(this.PROP_RESUME_IDX);
-        return true;
+    const lock = LockService.getScriptLock();
+    let hasLock = false;
+    try {
+      if (!lock.tryLock(2000)) {
+        log.warn('Could not acquire script lock within 2 seconds. Overlapping run detected, exiting early.');
+        return false;
       }
-      log.info(`Resuming from index ${startIdx}`);
-    } else {
-      props.deleteProperty(this.PROP_RESUME_IDX);
-      props.setProperty(this.PROP_RUN_ID, Utils_.generateId('FI'));
-    }
-    const runId = props.getProperty(this.PROP_RUN_ID) || 'UNKNOWN';
+      hasLock = true;
 
-    // Report counters
-    const report = {
-      runId,
-      started:      new Date().toISOString(),
-      attempted:    0, succeeded: 0, skipped: 0,
-      missing_ar:   0, headerFails: 0,
-      rowsByType:   {},   // { TYPE: count }
-      rowsSkipped:  0,
-      errors:       [],
-      sampleHeaders: null, sampleResolved: null
-    };
-
-    // buckets: { 'BANKER': [ {key, data}, … ], 'SNIPER_OU': [...], … }
-    const buckets = {};
-
-    // Clear on fresh run OR when resume restarts from 0 (no prior chunks)
-    const isGenuineResume = opts.resume && startIdx > 0;
-    if (!isGenuineResume && opts.clearBeforeImport !== false) {
-      this._clearIntakeTabs_(ss, log);
-    }
-
-    const deadline = Date.now() + 270000; // 4.5 min
-
-    // ◆ PATCH: build a set of active IDs from the fresh registry fetch for mid-run removal safety
-    const activeSatIds = new Set(satList.map(s => s.id));
-
-    for (let i = startIdx; i < satList.length; i++) {
-      const sat = satList[i];
-
-      // ◆ PATCH: if resuming and a satellite was removed from the registry, skip it
-      if (opts.resume && !activeSatIds.has(sat.id)) {
-        log.info(`[${i+1}/${total}] ${sat.name} (${sat.id}) — SKIPPED_REMOVED (not in registry)`);
-        report.skipped++;
-        continue;
-      }
-
-      if (Date.now() > deadline) {
-        log.warn(`Time limit at satellite ${i}. Saving resume state.`);
-        props.setProperty(this.PROP_RESUME_IDX, String(i));
-        this._flushBuckets_(ss, buckets, log, report);
-        this._writeRunReport_(ss, report, log);
-        Log_.writeToSheet(ss);
-        this._installResumeTimer_(log);   // ← auto-resume in ~1 min
+      const satellites = this.discoverSatellites_(log);
+      if (!satellites || satellites.length === 0) {
+        log.error('No satellites discovered.');
         return false;
       }
 
-      report.attempted++;
-      log.info(`[${i+1}/${total}] ${sat.name} (${sat.id})`);
+      const limit   = opts.limit || satellites.length;
+      const satList = satellites.slice(0, limit);
+      const total   = satList.length;
+      log.info(`Satellites to process: ${total} (limit=${limit})`);
 
-      try {
-        const result = this.readAccuracyReport_(sat.id, log);
+      const props = PropertiesService.getScriptProperties();
+      let startIdx = 0;
+      if (opts.resume) {
+        startIdx = parseInt(props.getProperty(this.PROP_RESUME_IDX) || '0', 10);
+        // If already complete, bail out cleanly — do not overwrite the report
+        if (startIdx >= satList.length) {
+          log.info('Fleet import already complete — nothing to resume.');
+          props.deleteProperty(this.PROP_RESUME_IDX);
+          return true;
+        }
+        log.info(`Resuming from index ${startIdx}`);
+      } else {
+        props.deleteProperty(this.PROP_RESUME_IDX);
+        props.setProperty(this.PROP_RUN_ID, Utils_.generateId('FI'));
+      }
+      const runId = props.getProperty(this.PROP_RUN_ID) || 'UNKNOWN';
 
-        if (!result) {
-          log.warn(`  → No Accuracy_Report tab. Skipping.`);
-          report.missing_ar++;
+      // Report counters
+      const report = {
+        runId,
+        started:      new Date().toISOString(),
+        attempted:    0, succeeded: 0, skipped: 0,
+        missing_ar:   0, headerFails: 0,
+        rowsByType:   {},   // { TYPE: count }
+        rowsSkipped:  0,
+        errors:       [],
+        sampleHeaders: null, sampleResolved: null
+      };
+
+      // buckets: { 'BANKER': [ {key, data}, … ], 'SNIPER_OU': [...], … }
+      const buckets = {};
+
+      // Clear on fresh run OR when resume restarts from 0 (no prior chunks)
+      const isGenuineResume = opts.resume && startIdx > 0;
+      if (!isGenuineResume && opts.clearBeforeImport !== false) {
+        this._clearIntakeTabs_(ss, log);
+      }
+
+      const startMs = Date.now();
+      const HARD_MS = 6 * 60 * 1000;
+      const WRAP_BUFFER_MS = 120 * 1000;  // 2 minutes buffer
+      const deadlineMs = startMs + HARD_MS - WRAP_BUFFER_MS;
+
+      // ◆ PATCH: build a set of active IDs from the fresh registry fetch for mid-run removal safety
+      const activeSatIds = new Set(satList.map(s => s.id));
+
+      for (let i = startIdx; i < satList.length; i++) {
+        if (Date.now() > deadlineMs) {
+          log.warn(`Time guard hit: elapsed=${(Date.now() - startMs) / 1000}s, buffer=${WRAP_BUFFER_MS / 1000}s`);
+          log.warn(`Time limit at satellite ${i}. Saving resume state.`);
+          props.setProperty(this.PROP_RESUME_IDX, String(i));
+          this._flushBuckets_(ss, buckets, log, report);
+          this._writeRunReport_(ss, report, log);
+          Log_.writeToSheet(ss);
+          this._installResumeTimer_(log);   // ← auto-resume in ~1 min
+          return false;
+        }
+
+        const sat = satList[i];
+
+        // ◆ PATCH: if resuming and a satellite was removed from the registry, skip it
+        if (opts.resume && !activeSatIds.has(sat.id)) {
+          log.info(`[${i+1}/${total}] ${sat.name} (${sat.id}) — SKIPPED_REMOVED (not in registry)`);
           report.skipped++;
           continue;
         }
 
-        const { headers, rows, headerIdx, configSnapshot } = result;
+        report.attempted++;
+        log.info(`[${i+1}/${total}] ${sat.name} (${sat.id})`);
 
-        if (headerIdx === -1 || rows.length === 0) {
-          report.headerFails++;
+        const tStartLoop = Date.now();
+        let tOpen = 0;
+        let satSpreadsheet;
+        try {
+          const tOpenStart = Date.now();
+          satSpreadsheet = SpreadsheetApp.openById(sat.id);
+          tOpen = Date.now() - tOpenStart;
+        } catch (e) {
+          log.error(`  → ERROR sat=${sat.id} (open): ${e.message}`);
+          report.errors.push({ sat: sat.id, reason: 'Failed to open: ' + e.message });
           report.skipped++;
           continue;
         }
 
-        log.info(`  → ${rows.length} data rows`);
+        try {
+          const result = this.readAccuracyReport_(satSpreadsheet, log);
 
-        if (report.succeeded === 0) {
-          report.sampleHeaders = headers;
-        }
-
-        // Resolve columns once per satellite
-        ColResolver_.init();
-        const ALIASES = {};
-        for (const k in Config_.sideColumnAliases) {
-          ALIASES[k] = [...Config_.sideColumnAliases[k]];
-        }
-        for (const k in Config_.totalsColumnAliases) {
-          if (ALIASES[k]) {
-            ALIASES[k] = Array.from(new Set([...ALIASES[k], ...Config_.totalsColumnAliases[k]]));
-          } else {
-            ALIASES[k] = [...Config_.totalsColumnAliases[k]];
+          if (!result) {
+            log.warn(`  → No Accuracy_Report tab. Skipping.`);
+            report.missing_ar++;
+            report.skipped++;
+            continue;
           }
-        }
 
-        const { resolved } = ColResolver_.resolve(headers, ALIASES, `AR_${sat.id.slice(0,8)}`);
+          const { headers, rows, headerIdx, configSnapshot, tARRead, tCfg, tBetSlips, tStats } = result;
 
-        if (report.succeeded === 0) report.sampleResolved = resolved;
+          if (headerIdx === -1 || rows.length === 0) {
+            report.headerFails++;
+            report.skipped++;
+            continue;
+          }
 
-        const resolvedCount = Object.keys(resolved).length;
-        if (resolvedCount < 4) {
-          log.warn(`  → Schema anomaly: only ${resolvedCount} canonicals resolved. Flagging satellite.`);
-          report.errors.push({ sat: sat.id, reason: `SCHEMA_ANOMALY: Only ${resolvedCount} recognizable columns` });
+          log.info(`  → ${rows.length} data rows`);
+
+          if (report.succeeded === 0) {
+            report.sampleHeaders = headers;
+          }
+
+          // Resolve columns once per satellite
+          ColResolver_.init();
+          const ALIASES = {};
+          for (const k in Config_.sideColumnAliases) {
+            ALIASES[k] = [...Config_.sideColumnAliases[k]];
+          }
+          for (const k in Config_.totalsColumnAliases) {
+            if (ALIASES[k]) {
+              ALIASES[k] = Array.from(new Set([...ALIASES[k], ...Config_.totalsColumnAliases[k]]));
+            } else {
+              ALIASES[k] = [...Config_.totalsColumnAliases[k]];
+            }
+          }
+
+          const { resolved } = ColResolver_.resolve(headers, ALIASES, `AR_${sat.id.slice(0,8)}`);
+
+          if (report.succeeded === 0) report.sampleResolved = resolved;
+
+          const resolvedCount = Object.keys(resolved).length;
+          if (resolvedCount < 4) {
+            log.warn(`  → Schema anomaly: only ${resolvedCount} canonicals resolved. Flagging satellite.`);
+            report.errors.push({ sat: sat.id, reason: `SCHEMA_ANOMALY: Only ${resolvedCount} recognizable columns` });
+            report.skipped++;
+            continue;
+          }
+
+          // Must have at least date
+          if (resolved['date'] === undefined) {
+            log.warn(`  → No date column. Flagging satellite.`);
+            report.errors.push({ sat: sat.id, reason: `SCHEMA_ANOMALY: Missing canonical 'date' column` });
+            report.skipped++;
+            continue;
+          }
+
+          const typeColIdx = resolved['type'];
+
+          const tRouteStart = Date.now();
+          let satRows = 0, satSkipped = 0;
+
+          for (let r = 0; r < rows.length; r++) {
+            const raw = rows[r];
+
+            // Skip blank rows
+            if (raw.every(c => c === '' || c === null || c === undefined)) {
+              satSkipped++;
+              continue;
+            }
+
+            // Skip banner / log / summary rows
+            const firstNonEmpty = raw.find(c => c !== '' && c !== null && c !== undefined);
+            const firstStr = String(firstNonEmpty || '').trim();
+            const fullRowStr = raw.join(' ').toLowerCase();
+            
+            if (
+              firstStr.startsWith('═') ||
+              firstStr.startsWith('---') ||
+              /^(source sheet|total bets|matched to|hits?:|misses?:|pushes|hit rate|metric|raw log|unique pred|\(no match\))/i.test(firstStr) ||
+              fullRowStr.includes('source sheet:') ||
+              fullRowStr.includes('--- bet details ---') ||
+              fullRowStr.includes('═══')
+            ) {
+              satSkipped++;
+              continue;
+            }
+
+            // Skip header-echo rows
+            const getRaw = (canon) => {
+              const idx = resolved[canon];
+              return (idx !== undefined && idx >= 0 && idx < raw.length) ? String(raw[idx] || '').trim().toLowerCase() : '';
+            };
+            
+            const rawType = getRaw('type');
+            if (rawType === 'type' || rawType === 'market' || rawType === 'bet type') {
+              satSkipped++;
+              continue;
+            }
+            
+            if (getRaw('league') === 'league' && getRaw('date') === 'date') {
+              satSkipped++;
+              continue;
+            }
+
+            const rowObj = this._buildRowObj_(raw, resolved, sat, configSnapshot);
+            const tabName = this._typeToTab_(rowObj.type);
+
+            const keyParts = [
+              sat.id,
+              rowObj.league, rowObj.date, rowObj.match,
+              rowObj.type, rowObj.pick, rowObj.quarter,
+              rowObj.direction, rowObj.line, rowObj.odds
+            ];
+            const key = keyParts.map(s => String(s || '').toUpperCase().trim()).join('|');
+
+            if (!buckets[tabName]) buckets[tabName] = [];
+            buckets[tabName].push({ key, data: this._toIntakeRow_(rowObj) });
+
+            report.rowsByType[tabName] = (report.rowsByType[tabName] || 0) + 1;
+            satRows++;
+          }
+          const tRoute = Date.now() - tRouteStart;
+
+          log.info(`  → Routed: ${satRows} rows across ${Object.keys(buckets).length} type(s), skipped: ${satSkipped}`);
+          report.rowsSkipped += satSkipped;
+          report.succeeded++;
+
+          const tTotal = Date.now() - tStartLoop;
+          log.info(`[PERF] sat=${sat.id} open=${tOpen}ms ar=${tARRead}ms cfg=${tCfg}ms slips=${tBetSlips}ms stats=${tStats}ms route=${tRoute}ms total=${tTotal}ms`);
+
+        } catch (e) {
+          log.error(`  → ERROR sat=${sat.id}: ${e.message}`);
+          report.errors.push({ sat: sat.id, reason: e.message });
           report.skipped++;
-          continue;
         }
+      }
 
-        // Must have at least date
-        if (resolved['date'] === undefined) {
-          log.warn(`  → No date column. Flagging satellite.`);
-          report.errors.push({ sat: sat.id, reason: `SCHEMA_ANOMALY: Missing canonical 'date' column` });
-          report.skipped++;
-          continue;
-        }
+      this._flushBuckets_(ss, buckets, log, report);
+      this._writeRunReport_(ss, report, log);
+      props.deleteProperty(this.PROP_RESUME_IDX);
 
-        const typeColIdx = resolved['type'];
+      log.info('═══ FLEET IMPORT COMPLETE ═══');
+      log.info(`Attempted=${report.attempted} Succeeded=${report.succeeded} Skipped=${report.skipped}`);
+      const typesSummary = Object.entries(report.rowsByType).map(([t,n]) => `${t}=${n}`).join(' ');
+      log.info(`Rows by type: ${typesSummary || 'none'}`);
 
-        let satRows = 0, satSkipped = 0;
-
-        for (let r = 0; r < rows.length; r++) {
-          const raw = rows[r];
-
-          // Skip blank rows
-          if (raw.every(c => c === '' || c === null || c === undefined)) {
-            satSkipped++;
-            continue;
-          }
-
-          // Skip banner / log / summary rows
-          const firstNonEmpty = raw.find(c => c !== '' && c !== null && c !== undefined);
-          const firstStr = String(firstNonEmpty || '').trim();
-          const fullRowStr = raw.join(' ').toLowerCase();
-          
-          if (
-            firstStr.startsWith('═') ||
-            firstStr.startsWith('---') ||
-            /^(source sheet|total bets|matched to|hits?:|misses?:|pushes|hit rate|metric|raw log|unique pred|\(no match\))/i.test(firstStr) ||
-            fullRowStr.includes('source sheet:') ||
-            fullRowStr.includes('--- bet details ---') ||
-            fullRowStr.includes('═══')
-          ) {
-            satSkipped++;
-            continue;
-          }
-
-          // Skip header-echo rows
-          const getRaw = (canon) => {
-            const idx = resolved[canon];
-            return (idx !== undefined && idx >= 0 && idx < raw.length) ? String(raw[idx] || '').trim().toLowerCase() : '';
-          };
-          
-          const rawType = getRaw('type');
-          if (rawType === 'type' || rawType === 'market' || rawType === 'bet type') {
-            satSkipped++;
-            continue;
-          }
-          
-          if (getRaw('league') === 'league' && getRaw('date') === 'date') {
-            satSkipped++;
-            continue;
-          }
-
-          const rowObj = this._buildRowObj_(raw, resolved, sat, configSnapshot);
-          const tabName = this._typeToTab_(rowObj.type);
-
-          const keyParts = [
-            sat.id,
-            rowObj.league, rowObj.date, rowObj.match,
-            rowObj.type, rowObj.pick, rowObj.quarter,
-            rowObj.direction, rowObj.line, rowObj.odds
-          ];
-          const key = keyParts.map(s => String(s || '').toUpperCase().trim()).join('|');
-
-          if (!buckets[tabName]) buckets[tabName] = [];
-          buckets[tabName].push({ key, data: this._toIntakeRow_(rowObj) });
-
-          report.rowsByType[tabName] = (report.rowsByType[tabName] || 0) + 1;
-          satRows++;
-        }
-
-        log.info(`  → Routed: ${satRows} rows across ${Object.keys(buckets).length} type(s), skipped: ${satSkipped}`);
-        report.rowsSkipped += satSkipped;
-        report.succeeded++;
-
-      } catch (e) {
-        log.error(`  → ERROR sat=${sat.id}: ${e.message}`);
-        report.errors.push({ sat: sat.id, reason: e.message });
-        report.skipped++;
+      return report.succeeded > 0;
+    } finally {
+      if (hasLock) {
+        lock.releaseLock();
       }
     }
-
-    this._flushBuckets_(ss, buckets, log, report);
-    this._writeRunReport_(ss, report, log);
-    props.deleteProperty(this.PROP_RESUME_IDX);
-
-    log.info('═══ FLEET IMPORT COMPLETE ═══');
-    log.info(`Attempted=${report.attempted} Succeeded=${report.succeeded} Skipped=${report.skipped}`);
-    const typesSummary = Object.entries(report.rowsByType).map(([t,n]) => `${t}=${n}`).join(' ');
-    log.info(`Rows by type: ${typesSummary || 'none'}`);
-
-    return report.succeeded > 0;
   },
 
   // ─── Type → tab name ──────────────────────────────────────────────────────
@@ -448,8 +485,11 @@ const FleetImport_ = {
   // ─── Flush all buckets to sheets ─────────────────────────────────────────
 
   _flushBuckets_(ss, buckets, log, report) {
+    const tFlushStart = Date.now();
     const seenKeys = {};
     const H = this.INTAKE_HEADERS;
+    let totalRows = 0;
+    let totalTabs = 0;
 
     for (const [tabName, items] of Object.entries(buckets)) {
       if (!items.length) continue;
@@ -473,27 +513,50 @@ const FleetImport_ = {
         const nextRow = sheet.getLastRow() + 1;
         sheet.getRange(nextRow, 1, padded.length, H.length).setValues(padded);
         log.info(`Flushed ${padded.length} rows → ${tabName}`);
+        totalRows += padded.length;
+        totalTabs++;
       }
     }
+    const tFlush = Date.now() - tFlushStart;
+    log.info(`[PERF] flushBuckets=${tFlush}ms tabs=${totalTabs} rows=${totalRows}`);
   },
 
   // ─── Clear all managed type tabs ─────────────────────────────────────────────
 
   _clearIntakeTabs_(ss, log) {
+    const H = this.INTAKE_HEADERS;
     ss.getSheets().forEach(sh => {
       const name = sh.getName();
       if (this.MANAGED_SHEET_RE.test(name) && !this.PROTECTED_SHEETS.has(name)) {
-        const last = sh.getLastRow();
-        if (last > 1) {
-          sh.getRange(2, 1, last - 1, sh.getMaxColumns()).clearContent();
-        }
-        
-        // Trim excess empty rows to keep the sheet light, but always leave at least one non-frozen row (row 2)
+        // 1. Ensure header row exists and freeze row 1
+        sh.getRange(1, 1, 1, H.length).setValues([H]);
+        sh.setFrozenRows(1);
+
+        // 2. Ensure sheet has at least 2 rows total
         const maxRows = sh.getMaxRows();
-        if (maxRows > 2) {
-          sh.deleteRows(3, maxRows - 2);
+        if (maxRows < 2) {
+          sh.insertRowsAfter(1, 1);
         }
-        
+
+        // 3. Clear contents below header (from row 2 down to lastRow)
+        const lastRow = sh.getLastRow();
+        const lastCol = Math.max(sh.getLastColumn(), H.length);
+        if (lastRow >= 2) {
+          sh.getRange(2, 1, lastRow - 1, lastCol).clearContent();
+        }
+
+        // 4. Trim rows but keep a buffer row 2
+        const updatedMaxRows = sh.getMaxRows();
+        if (updatedMaxRows > 2) {
+          sh.deleteRows(3, updatedMaxRows - 2);
+        }
+
+        // 5. Trim columns beyond schema (to prevent width bloat)
+        const maxCols = sh.getMaxColumns();
+        if (maxCols > H.length) {
+          sh.deleteColumns(H.length + 1, maxCols - H.length);
+        }
+
         log.info('Cleared: ' + name);
       }
     });
@@ -609,28 +672,49 @@ const FleetImport_ = {
 
   // ─── Read Accuracy_Report tab ─────────────────────────────────────────────
 
-  readAccuracyReport_(satSheetId, log) {
+  readAccuracyReport_(satOrId, log) {
     log = log || Log_.module('AR_READER');
+    const tARReadStart = Date.now();
     let sat;
-    try {
-      sat = SpreadsheetApp.openById(satSheetId);
-    } catch (e) {
-      log.warn(`Cannot open ${satSheetId}: ${e.message}`);
-      return null;
+    if (typeof satOrId === 'string') {
+      try {
+        sat = SpreadsheetApp.openById(satOrId);
+      } catch (e) {
+        log.warn(`Cannot open ${satOrId}: ${e.message}`);
+        return null;
+      }
+    } else {
+      sat = satOrId;
+    }
+
+    const satSheets = sat.getSheets();
+    const sheetMap = {};
+    for (let s of satSheets) {
+      const name = s.getName();
+      sheetMap[name.toLowerCase()] = s;
     }
 
     let arSheet = null;
     for (const alias of this.AR_TAB_ALIASES) {
-      arSheet = sat.getSheetByName(alias);
+      arSheet = sheetMap[alias.toLowerCase()];
       if (arSheet) break;
     }
     if (!arSheet) return null;
 
-    const maxRows = Math.min(60, arSheet.getLastRow());
-    const maxCols = Math.min(80, arSheet.getLastColumn());
-    if (maxRows === 0 || maxCols === 0) return { headers: [], rows: [], headerIdx: -1 };
+    let fullData;
+    try {
+      const maxRows = Math.min(arSheet.getMaxRows(), 2000);
+      const maxCols = Math.min(arSheet.getMaxColumns(), 30);
+      fullData = arSheet.getRange(1, 1, maxRows, maxCols).getValues();
+    } catch (e) {
+      log.warn(`  AR read error: ${e.message}`);
+      return null;
+    }
+    if (fullData.length === 0 || fullData[0].length === 0) {
+      return { headers: [], rows: [], headerIdx: -1 };
+    }
 
-    const data = arSheet.getRange(1, 1, maxRows, maxCols).getValues();
+    const data = fullData.slice(0, 60).map(row => row.slice(0, 30));
     const tokens = this.HEADER_TOKENS;
 
     // Find best header row
@@ -664,31 +748,57 @@ const FleetImport_ = {
     }
 
     if (bestRowIdx === -1 || bestNonEmpty < 6 || bestTokenHits < 3) {
-      log.warn(`HEADER_NOT_FOUND sat=${satSheetId}`);
+      log.warn(`HEADER_NOT_FOUND sat=${satOrId}`);
       return { headers: [], rows: [], headerIdx: -1 };
     }
 
     const finalHeaders = data[bestRowIdx].map(h => String(h || '').trim());
     log.info(`Header row ${bestRowIdx + 1}: [${finalHeaders.slice(0,10).join(', ')}]`);
 
-    const fullData = arSheet.getDataRange().getValues();
-    const rows = fullData.slice(bestRowIdx + 1);
+    // Slicing out trailing empty rows
+    const rawRows = fullData.slice(bestRowIdx + 1);
+    const rows = [];
+    let consecutiveBlanks = 0;
+    for (let r = 0; r < rawRows.length; r++) {
+      const row = rawRows[r];
+      const isBlank = row.every(c => c === '' || c === null || c === undefined);
+      if (isBlank) {
+        consecutiveBlanks++;
+        if (consecutiveBlanks >= 10) {
+          break;
+        }
+      } else {
+        consecutiveBlanks = 0;
+        rows.push(row);
+      }
+    }
     log.info(`→ ${rows.length} data rows`);
+
+    const tARRead = Date.now() - tARReadStart;
 
     // --- EXTRACT CONFIGURATION SNAPSHOT (multi-source merge) ---
     // Source 1: Config_* sheets (fill-first)
+    const tCfgStart = Date.now();
     const cfgSheetData = {};
-    const satSheets = sat.getSheets();
     for (const s of satSheets) {
       const sName = s.getName();
       if (sName.startsWith('Config_') && !sName.includes('Proposals')) {
         try {
-          const cfgData = s.getDataRange().getValues();
+          var numRows = Math.min(s.getMaxRows(), 600);
+          var numCols = Math.min(s.getMaxColumns(), 3);
+          const cfgData = s.getRange(1, 1, numRows, numCols).getValues();
           const cfgProps = {};
+          let consecutiveEmptyKeys = 0;
           for (let i = 0; i < cfgData.length; i++) {
             const key = String(cfgData[i][0] || '').trim();
             const val = cfgData[i][1];
-            if (key && !key.startsWith('//') && val !== undefined && val !== '') {
+            if (!key) {
+              consecutiveEmptyKeys++;
+              if (consecutiveEmptyKeys >= 50) break;
+              continue;
+            }
+            consecutiveEmptyKeys = 0;
+            if (!key.startsWith('//') && val !== undefined && val !== '') {
               cfgProps[key] = this._normalizeCellValue_(val);
             }
           }
@@ -696,19 +806,24 @@ const FleetImport_ = {
         } catch (_) { /* ignore unreadable */ }
       }
     }
+    const tCfg = Date.now() - tCfgStart;
 
     // Source 2: Bet_Slips (fill-missing keys only)
-    const betSlipsCfg  = this._extractConfigFromBetSlips_(sat, log);
+    const tBetSlipsStart = Date.now();
+    const betSlipsCfg  = this._extractConfigFromBetSlips_(sat, sheetMap, log);
+    const tBetSlips = Date.now() - tBetSlipsStart;
 
     // Source 3: Stats sheet
-    const statsSummary = this._extractStatsSheet_(sat, log);
+    const tStatsStart = Date.now();
+    const statsSummary = this._extractStatsSheet_(sat, sheetMap, log);
+    const tStats = Date.now() - tStatsStart;
 
     // Merge + size-guard
     const configSnapshot = this._guardConfigJson_(
       this._mergeConfigSnapshot_(cfgSheetData, betSlipsCfg, statsSummary), log
     );
 
-    return { headers: finalHeaders, rows, headerIdx: bestRowIdx, configSnapshot };
+    return { headers: finalHeaders, rows, headerIdx: bestRowIdx, configSnapshot, tARRead, tCfg, tBetSlips, tStats };
   },
 
   // ─── Run report ───────────────────────────────────────────────────────────
@@ -802,36 +917,50 @@ const FleetImport_ = {
   // key/value rows until the next block header or bet-table header.
   // Returns an object keyed by block name (same shape as Config_* sheet data).
   //
-  _extractConfigFromBetSlips_(sat, log) {
+  _extractConfigFromBetSlips_(sat, sheetMap, log) {
+    if (!sheetMap || typeof sheetMap.info === 'function' || typeof sheetMap.log === 'function') {
+      log = sheetMap;
+      sheetMap = null;
+    }
     log = log || { info: function() {}, warn: function() {} };
 
-    // Detect sheet (tolerant matching)
+    if (!sheetMap) {
+      sheetMap = {};
+      var satSheets = sat.getSheets();
+      for (var si = 0; si < satSheets.length; si++) {
+        var s = satSheets[si];
+        sheetMap[s.getName().toLowerCase()] = s;
+      }
+    }
+
+    // Detect sheet (tolerant matching using sheetMap)
     var bsSheet = null;
-    var candidates = ['Bet_Slips', 'Bets_Slips', 'Bet Slips', 'bet_slips', 'BetSlips'];
+    var candidates = ['bet_slips', 'bets_slips', 'bet slips', 'betslips'];
     for (var ci = 0; ci < candidates.length; ci++) {
-      bsSheet = sat.getSheetByName(candidates[ci]);
+      bsSheet = sheetMap[candidates[ci]];
       if (bsSheet) break;
     }
     if (!bsSheet) {
-      // Case-insensitive scan
-      var allSheets = sat.getSheets();
-      for (var si = 0; si < allSheets.length; si++) {
-        if (allSheets[si].getName().toLowerCase().replace(/[\s_]/g, '') === 'betslips') {
-          bsSheet = allSheets[si];
+      // Case-insensitive scan over all keys in sheetMap
+      var keys = Object.keys(sheetMap);
+      for (var ki = 0; ki < keys.length; ki++) {
+        if (keys[ki].replace(/[\s_]/g, '') === 'betslips') {
+          bsSheet = sheetMap[keys[ki]];
           break;
         }
       }
     }
     if (!bsSheet) { log.info('  Bet_Slips: not found'); return {}; }
 
-    // Bounded read: A1:E500
-    var lastRow = Math.min(bsSheet.getLastRow(), 500);
-    var lastCol = Math.min(bsSheet.getLastColumn(), 5);
-    if (lastRow === 0 || lastCol === 0) { log.info('  Bet_Slips: empty'); return {}; }
+    // Single-fetch: read bounded window A1:E500 without using getDataRange()
     var data;
     try {
-      data = bsSheet.getRange(1, 1, lastRow, lastCol).getValues();
+      var numRows = Math.min(bsSheet.getMaxRows(), 500);
+      var numCols = Math.min(bsSheet.getMaxColumns(), 5);
+      data = bsSheet.getRange(1, 1, numRows, numCols).getValues();
     } catch (e) { log.warn('  Bet_Slips read error: ' + e.message); return {}; }
+
+    if (data.length === 0 || data[0].length === 0) { log.info('  Bet_Slips: empty'); return {}; }
 
     // Block headers we care about
     var BLOCK_NAMES = { 'Config_Tier2': true, 'Config_Tier1': true, 'Config_Accumulator': true };
@@ -862,9 +991,23 @@ const FleetImport_ = {
         break;
       }
 
-      // New block start?
-      if (BLOCK_NAMES[colA]) {
-        currentBlock = colA;
+      // New block start? Scan all cells of a row to catch layouts where it might be shifted or share a row
+      var rowCells = row.map(function(c) { return String(c || '').trim(); });
+      var foundBlockName = null;
+      for (var ci = 0; ci < rowCells.length; ci++) {
+        var cellVal = rowCells[ci];
+        if (BLOCK_NAMES[cellVal]) {
+          foundBlockName = cellVal;
+          break;
+        }
+        var cellValNorm = cellVal.toUpperCase().replace(/[\s_]/g, '');
+        if (cellValNorm === 'CONFIGTIER2') { foundBlockName = 'Config_Tier2'; break; }
+        if (cellValNorm === 'CONFIGTIER1') { foundBlockName = 'Config_Tier1'; break; }
+        if (cellValNorm === 'CONFIGACCUMULATOR') { foundBlockName = 'Config_Accumulator'; break; }
+      }
+
+      if (foundBlockName) {
+        currentBlock = foundBlockName;
         rowsInBlock  = 0;
         if (!result[currentBlock]) {
           result[currentBlock] = { __comments: {} };
@@ -919,27 +1062,34 @@ const FleetImport_ = {
   // Reads A1:F250 of a sheet named `Stats` (case-insensitive).
   // Extracts winner-accuracy table and probability-range breakdown table.
   //
-  _extractStatsSheet_(sat, log) {
+  _extractStatsSheet_(sat, sheetMap, log) {
+    if (!sheetMap || typeof sheetMap.info === 'function' || typeof sheetMap.log === 'function') {
+      log = sheetMap;
+      sheetMap = null;
+    }
     log = log || { info: function() {}, warn: function() {} };
 
-    var statsSheet = null;
-    var allSheets = sat.getSheets();
-    for (var si = 0; si < allSheets.length; si++) {
-      if (allSheets[si].getName().toLowerCase() === 'stats') {
-        statsSheet = allSheets[si];
-        break;
+    if (!sheetMap) {
+      sheetMap = {};
+      var satSheets = sat.getSheets();
+      for (var si = 0; si < satSheets.length; si++) {
+        var s = satSheets[si];
+        sheetMap[s.getName().toLowerCase()] = s;
       }
     }
+
+    var statsSheet = sheetMap['stats'];
     if (!statsSheet) { return {}; }
 
-    var lastRow = Math.min(statsSheet.getLastRow(), 250);
-    var lastCol = Math.min(statsSheet.getLastColumn(), 6);
-    if (lastRow === 0 || lastCol === 0) return {};
-
+    // Single-fetch: read bounded window A1:F250 without using getDataRange()
     var data;
     try {
-      data = statsSheet.getRange(1, 1, lastRow, lastCol).getValues();
+      var numRows = Math.min(statsSheet.getMaxRows(), 250);
+      var numCols = Math.min(statsSheet.getMaxColumns(), 6);
+      data = statsSheet.getRange(1, 1, numRows, numCols).getValues();
     } catch (e) { log.warn('  Stats read error: ' + e.message); return {}; }
+
+    if (data.length === 0 || data[0].length === 0) return {};
 
     var result = {};
 
