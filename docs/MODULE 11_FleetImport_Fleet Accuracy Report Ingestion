@@ -599,8 +599,9 @@ const FleetImport_ = {
     const rows = fullData.slice(bestRowIdx + 1);
     log.info(`→ ${rows.length} data rows`);
 
-    // --- EXTRACT CONFIGURATION SNAPSHOT ---
-    const extractedConfigs = {};
+    // --- EXTRACT CONFIGURATION SNAPSHOT (multi-source merge) ---
+    // Source 1: Config_* sheets (fill-first)
+    const cfgSheetData = {};
     const satSheets = sat.getSheets();
     for (const s of satSheets) {
       const sName = s.getName();
@@ -612,18 +613,24 @@ const FleetImport_ = {
             const key = String(cfgData[i][0] || '').trim();
             const val = cfgData[i][1];
             if (key && !key.startsWith('//') && val !== undefined && val !== '') {
-              cfgProps[key] = val;
+              cfgProps[key] = this._normalizeCellValue_(val);
             }
           }
-          if (Object.keys(cfgProps).length > 0) {
-            extractedConfigs[sName] = cfgProps;
-          }
-        } catch (e) {
-          // ignore unreadable config sheets
-        }
+          if (Object.keys(cfgProps).length > 0) cfgSheetData[sName] = cfgProps;
+        } catch (_) { /* ignore unreadable */ }
       }
     }
-    const configSnapshot = Object.keys(extractedConfigs).length > 0 ? JSON.stringify(extractedConfigs) : '{}';
+
+    // Source 2: Bet_Slips (fill-missing keys only)
+    const betSlipsCfg  = this._extractConfigFromBetSlips_(sat, log);
+
+    // Source 3: Stats sheet
+    const statsSummary = this._extractStatsSheet_(sat, log);
+
+    // Merge + size-guard
+    const configSnapshot = this._guardConfigJson_(
+      this._mergeConfigSnapshot_(cfgSheetData, betSlipsCfg, statsSummary), log
+    );
 
     return { headers: finalHeaders, rows, headerIdx: bestRowIdx, configSnapshot };
   },
@@ -690,6 +697,341 @@ const FleetImport_ = {
     }
   },
 
+  // ─── Cell value normaliser ─────────────────────────────────────────────────
+
+  _normalizeCellValue_(v) {
+    if (v === null || v === undefined || v === '') return undefined;
+    if (typeof v === 'boolean') return v;
+    if (v instanceof Date) return v.toISOString();
+    if (typeof v === 'number') return v;
+    var s = String(v).trim();
+    if (!s) return undefined;
+    var u = s.toUpperCase();
+    if (u === 'TRUE')  return true;
+    if (u === 'FALSE') return false;
+    // Percent string → fraction
+    if (/^\d+(\.\d+)?%$/.test(s)) {
+      var p = parseFloat(s);
+      return isFinite(p) ? p / 100 : s;
+    }
+    var n = Number(s);
+    if (!isNaN(n) && isFinite(n)) return n;
+    return s;
+  },
+
+  // ─── Bet_Slips config extractor ───────────────────────────────────────────
+  //
+  // Reads a BOUNDED window (A1:E500) of the Bet_Slips sheet.
+  // Detects Config_Tier2 / Config_Tier1 / Config_Accumulator blocks, parses
+  // key/value rows until the next block header or bet-table header.
+  // Returns an object keyed by block name (same shape as Config_* sheet data).
+  //
+  _extractConfigFromBetSlips_(sat, log) {
+    log = log || { info: function() {}, warn: function() {} };
+
+    // Detect sheet (tolerant matching)
+    var bsSheet = null;
+    var candidates = ['Bet_Slips', 'Bets_Slips', 'Bet Slips', 'bet_slips', 'BetSlips'];
+    for (var ci = 0; ci < candidates.length; ci++) {
+      bsSheet = sat.getSheetByName(candidates[ci]);
+      if (bsSheet) break;
+    }
+    if (!bsSheet) {
+      // Case-insensitive scan
+      var allSheets = sat.getSheets();
+      for (var si = 0; si < allSheets.length; si++) {
+        if (allSheets[si].getName().toLowerCase().replace(/[\s_]/g, '') === 'betslips') {
+          bsSheet = allSheets[si];
+          break;
+        }
+      }
+    }
+    if (!bsSheet) { log.info('  Bet_Slips: not found'); return {}; }
+
+    // Bounded read: A1:E500
+    var lastRow = Math.min(bsSheet.getLastRow(), 500);
+    var lastCol = Math.min(bsSheet.getLastColumn(), 5);
+    if (lastRow === 0 || lastCol === 0) { log.info('  Bet_Slips: empty'); return {}; }
+    var data;
+    try {
+      data = bsSheet.getRange(1, 1, lastRow, lastCol).getValues();
+    } catch (e) { log.warn('  Bet_Slips read error: ' + e.message); return {}; }
+
+    // Block headers we care about
+    var BLOCK_NAMES = { 'Config_Tier2': true, 'Config_Tier1': true, 'Config_Accumulator': true };
+
+    // Bet-table stop tokens (stop if >= 5 match)
+    var BET_HEADER_TOKENS = ['league','date','match','pick','type','odds','confidence','ev','tier','result','outcome'];
+
+    var result = {};
+    var currentBlock = null;
+    var blocksFound = [];
+    var rowsInBlock = 0;
+    var MAX_ROWS_PER_BLOCK = 80;
+
+    for (var r = 0; r < data.length; r++) {
+      var row = data[r];
+      var colA = String(row[0] === null || row[0] === undefined ? '' : row[0]).trim();
+      var colB = row.length > 1 ? row[1] : '';
+      var colC = row.length > 2 ? row[2] : '';
+
+      // Stop condition: bet-table header detected
+      var rowJoined = row.map(function(c) { return String(c || '').toLowerCase(); }).join('|');
+      var tokenHits = 0;
+      for (var ti = 0; ti < BET_HEADER_TOKENS.length; ti++) {
+        if (rowJoined.indexOf(BET_HEADER_TOKENS[ti]) !== -1) tokenHits++;
+      }
+      if (tokenHits >= 5) {
+        log.info('  Bet_Slips: bet-table header detected at row ' + (r + 1) + ', stopping.');
+        break;
+      }
+
+      // New block start?
+      if (BLOCK_NAMES[colA]) {
+        currentBlock = colA;
+        rowsInBlock  = 0;
+        if (!result[currentBlock]) {
+          result[currentBlock] = { __comments: {} };
+          blocksFound.push(currentBlock);
+        }
+        continue;
+      }
+
+      if (!currentBlock) continue;
+      if (rowsInBlock >= MAX_ROWS_PER_BLOCK) continue;
+
+      // Divider rows: skip
+      if (colA.startsWith('---') || colA.indexOf('═══') !== -1 ||
+          colA.startsWith('===') || colA.startsWith('***')) continue;
+
+      // Skip rows where colA contains 'key' and colB contains 'value' (column header)
+      if (colA.toLowerCase() === 'key' &&
+          String(colB || '').toLowerCase().indexOf('value') !== -1) continue;
+
+      // Blank key row: skip
+      if (!colA) continue;
+
+      // Parse key/value
+      var rawVal = (colB === '' || colB === null || colB === undefined) ? colC : colB;
+      var normVal = this._normalizeCellValue_(rawVal);
+      if (normVal !== undefined) {
+        result[currentBlock][colA] = normVal;
+        // Store comment if colC differs from value and is non-empty
+        var commentSrc = (colB === '' || colB === null || colB === undefined) ? '' : String(colC || '').trim();
+        if (commentSrc) result[currentBlock].__comments[colA] = commentSrc;
+        rowsInBlock++;
+      }
+    }
+
+    // Extract cfgVersions
+    var cfgVersions = {};
+    if (result['Config_Tier2'] && result['Config_Tier2']['config_version'])
+      cfgVersions.tier2 = result['Config_Tier2']['config_version'];
+    if (result['Config_Tier1'] && result['Config_Tier1']['config_version'])
+      cfgVersions.tier1 = result['Config_Tier1']['config_version'];
+    if (result['Config_Accumulator'] && result['Config_Accumulator']['config_version'])
+      cfgVersions.acca = result['Config_Accumulator']['config_version'];
+    if (Object.keys(cfgVersions).length > 0) result.__cfgVersions = cfgVersions;
+
+    log.info('  Bet_Slips: found blocks=[' + blocksFound.join(', ') + ']' +
+             (Object.keys(cfgVersions).length ? ' versions=' + JSON.stringify(cfgVersions) : ''));
+    return result;
+  },
+
+  // ─── Stats sheet extractor ─────────────────────────────────────────────────
+  //
+  // Reads A1:F250 of a sheet named `Stats` (case-insensitive).
+  // Extracts winner-accuracy table and probability-range breakdown table.
+  //
+  _extractStatsSheet_(sat, log) {
+    log = log || { info: function() {}, warn: function() {} };
+
+    var statsSheet = null;
+    var allSheets = sat.getSheets();
+    for (var si = 0; si < allSheets.length; si++) {
+      if (allSheets[si].getName().toLowerCase() === 'stats') {
+        statsSheet = allSheets[si];
+        break;
+      }
+    }
+    if (!statsSheet) { return {}; }
+
+    var lastRow = Math.min(statsSheet.getLastRow(), 250);
+    var lastCol = Math.min(statsSheet.getLastColumn(), 6);
+    if (lastRow === 0 || lastCol === 0) return {};
+
+    var data;
+    try {
+      data = statsSheet.getRange(1, 1, lastRow, lastCol).getValues();
+    } catch (e) { log.warn('  Stats read error: ' + e.message); return {}; }
+
+    var result = {};
+
+    // Helper: parse accuracy cell -> fraction
+    var parseAcc = function(v) {
+      if (v === null || v === undefined || v === '') return null;
+      if (typeof v === 'number') return v > 1 ? v / 100 : v;
+      var s = String(v).replace('%', '').trim();
+      var n = parseFloat(s);
+      return isFinite(n) ? (n > 1 ? n / 100 : n) : null;
+    };
+
+    // Helper: find a row index whose joined lower content contains a substring
+    var findAnchor = function(substr, startRow) {
+      startRow = startRow || 0;
+      for (var i = startRow; i < data.length; i++) {
+        var joined = data[i].map(function(c) { return String(c || '').toLowerCase(); }).join('|');
+        if (joined.indexOf(substr) !== -1) return i;
+      }
+      return -1;
+    };
+
+    // Helper: collect table rows until blank or non-numeric first column
+    var collectTable = function(headerRow, cols) {
+      var rows = [];
+      for (var i = headerRow + 1; i < Math.min(headerRow + 60, data.length); i++) {
+        var r = data[i];
+        var first = String(r[0] === null || r[0] === undefined ? '' : r[0]).trim();
+        if (!first) break; // blank row = end of table
+        var obj = {};
+        for (var c = 0; c < cols.length; c++) {
+          obj[cols[c]] = c < r.length ? r[c] : null;
+        }
+        rows.push(obj);
+      }
+      return rows;
+    };
+
+    // 1) Winner accuracy table
+    var anchorWA = findAnchor('accuracy', 0);
+    if (anchorWA !== -1) {
+      // Find header row with league/accuracy/correct/total near anchor
+      var hWA = -1;
+      for (var i = anchorWA; i < Math.min(anchorWA + 5, data.length); i++) {
+        var j = data[i].map(function(c) { return String(c || '').toLowerCase(); }).join('|');
+        if (j.indexOf('league') !== -1 || j.indexOf('accuracy') !== -1) { hWA = i; break; }
+      }
+      if (hWA !== -1) {
+        var rawWA = collectTable(hWA, ['league', 'accuracy', 'correct', 'total']);
+        result.winnerAccuracyByLeague = rawWA.map(function(row) {
+          return {
+            league:   String(row.league || '').trim(),
+            accuracy: parseAcc(row.accuracy),
+            correct:  isFinite(Number(row.correct)) ? Number(row.correct) : null,
+            total:    isFinite(Number(row.total))   ? Number(row.total)   : null
+          };
+        }).filter(function(r) { return r.league; });
+        // Cap at 30 leagues for size safety
+        if (result.winnerAccuracyByLeague.length > 30)
+          result.winnerAccuracyByLeague = result.winnerAccuracyByLeague.slice(0, 30);
+      }
+    }
+
+    // 2) Probability range breakdown
+    var anchorPR = findAnchor('probability', 0);
+    if (anchorPR !== -1) {
+      var hPR = -1;
+      for (var i = anchorPR; i < Math.min(anchorPR + 5, data.length); i++) {
+        var j = data[i].map(function(c) { return String(c || '').toLowerCase(); }).join('|');
+        if (j.indexOf('range') !== -1 || j.indexOf('accuracy') !== -1) { hPR = i; break; }
+      }
+      if (hPR !== -1) {
+        var rawPR = collectTable(hPR, ['range', 'accuracy', 'correct', 'total']);
+        result.probRangeBreakdown = rawPR.map(function(row) {
+          return {
+            range:    String(row.range || '').trim(),
+            accuracy: parseAcc(row.accuracy),
+            correct:  isFinite(Number(row.correct)) ? Number(row.correct) : null,
+            total:    isFinite(Number(row.total))   ? Number(row.total)   : null
+          };
+        }).filter(function(r) { return r.range; });
+      }
+    }
+
+    if (Object.keys(result).length > 0)
+      log.info('  Stats: extracted tables=[' + Object.keys(result).join(', ') + ']');
+    return result;
+  },
+
+  // ─── Config snapshot merge ─────────────────────────────────────────────────
+  //
+  // Merge rule: Config_* sheets fill first; Bet_Slips fills MISSING keys only.
+  // Stats goes under "Stats.*" key.
+  //
+  _mergeConfigSnapshot_(cfgSheetData, betSlipsCfg, statsSummary) {
+    var merged = {};
+
+    // 1. Copy Config_* sheet data
+    var sheetKeys = Object.keys(cfgSheetData);
+    for (var i = 0; i < sheetKeys.length; i++) {
+      merged[sheetKeys[i]] = {};
+      var src = cfgSheetData[sheetKeys[i]];
+      var srcKeys = Object.keys(src);
+      for (var j = 0; j < srcKeys.length; j++) {
+        merged[sheetKeys[i]][srcKeys[j]] = src[srcKeys[j]];
+      }
+    }
+
+    // 2. Bet_Slips: fill missing keys per block; also carry __cfgVersions
+    var bsBlocks = Object.keys(betSlipsCfg).filter(function(k) { return k !== '__cfgVersions'; });
+    for (var bi = 0; bi < bsBlocks.length; bi++) {
+      var block = bsBlocks[bi];
+      if (!merged[block]) merged[block] = {};
+      var bsProps = betSlipsCfg[block];
+      var bsPropKeys = Object.keys(bsProps).filter(function(k) { return k !== '__comments'; });
+      for (var bj = 0; bj < bsPropKeys.length; bj++) {
+        var bKey = bsPropKeys[bj];
+        // Only fill if not already set by Config_* sheet
+        if (!merged[block].hasOwnProperty(bKey)) {
+          merged[block][bKey] = bsProps[bKey];
+        }
+      }
+    }
+    if (betSlipsCfg.__cfgVersions) merged.__cfgVersions = betSlipsCfg.__cfgVersions;
+
+    // 3. Stats summary
+    if (statsSummary && Object.keys(statsSummary).length > 0) {
+      merged['Stats'] = statsSummary;
+    }
+
+    return merged;
+  },
+
+  // ─── JSON size guard ──────────────────────────────────────────────────────
+  //
+  // Google Sheets cell limit: 50,000 chars. We target < 45,000.
+  // If over-limit: drop __comments, cap league arrays, add truncated flag.
+  //
+  _guardConfigJson_(merged, log) {
+    if (!merged || Object.keys(merged).length === 0) return '{}';
+    var json = JSON.stringify(merged);
+    if (json.length <= 45000) return json;
+
+    // Prune 1: drop __comments from all blocks
+    var keys = Object.keys(merged);
+    for (var i = 0; i < keys.length; i++) {
+      if (merged[keys[i]] && merged[keys[i]].__comments)
+        delete merged[keys[i]].__comments;
+    }
+    json = JSON.stringify(merged);
+    if (json.length <= 45000) return json;
+
+    // Prune 2: cap Stats league array to 15
+    if (merged['Stats'] && merged['Stats'].winnerAccuracyByLeague) {
+      merged['Stats'].winnerAccuracyByLeague =
+        merged['Stats'].winnerAccuracyByLeague.slice(0, 15);
+    }
+    json = JSON.stringify(merged);
+    if (json.length <= 45000) return json;
+
+    // Prune 3: drop Stats entirely
+    delete merged['Stats'];
+    merged.config_profile_truncated = true;
+    json = JSON.stringify(merged);
+    if (log) log.warn('  config_profile truncated (' + json.length + ' chars after pruning)');
+    return json;
+  },
+
   _cancelResumeTimer_() {
     const props = PropertiesService.getScriptProperties();
     const oldId = props.getProperty(this.PROP_TRIGGER_ID);
@@ -702,6 +1044,158 @@ const FleetImport_ = {
     });
     props.deleteProperty(this.PROP_TRIGGER_ID);
   }
+};
+
+// ============================================================================
+// Self-test harness — call from Apps Script editor
+// ============================================================================
+
+function runFleetImportSelfTests() {
+  FleetImport_.selfTestBetSlipsConfigExtraction_();
+  FleetImport_.selfTestStatsExtraction_();
+}
+
+FleetImport_.selfTestBetSlipsConfigExtraction_ = function() {
+  var log = { info: Logger.log.bind(Logger), warn: Logger.log.bind(Logger) };
+  Logger.log('=== selfTestBetSlipsConfigExtraction_ ===');
+
+  // Fake Bet_Slips 2D array
+  var fakeData = [
+    ['Config_Tier2',    '',              ''],
+    ['--- CORE PARAMS ---', '',          ''],
+    ['config_version',  'v2.4.1',        ''],
+    ['threshold',        0.62,           '62% minimum confidence'],
+    ['ou_min_conf',      '0.65',         '65% for O/U'],
+    ['forebet_blend',    'TRUE',         'enable forebet'],
+    ['last_updated',     '2026-05-01',   ''],
+    ['Config_Tier1',    '',              ''],
+    ['config_version',  'v1.9.0',        ''],
+    ['threshold',        0.58,           ''],
+    ['Config_Accumulator', '',           ''],
+    ['config_version',  'v3.0.0',        ''],
+    ['acca_min_legs',    3,              ''],
+  ];
+
+  // Inject fake getValues by creating a mock sat object
+  var mockSat = {
+    getSheets: function() {
+      return [{
+        getName: function() { return 'Bet_Slips'; },
+        getLastRow: function() { return fakeData.length; },
+        getLastColumn: function() { return 3; },
+        getRange: function(r, c, nR, nC) {
+          return {
+            getValues: function() {
+              return fakeData.slice(r - 1, r - 1 + nR).map(function(row) {
+                return row.slice(c - 1, c - 1 + nC);
+              });
+            }
+          };
+        }
+      }];
+    },
+    getSheetByName: function(name) {
+      if (name === 'Bet_Slips') return this.getSheets()[0];
+      return null;
+    }
+  };
+
+  var result = FleetImport_._extractConfigFromBetSlips_(mockSat, log);
+  Logger.log('Extracted: ' + JSON.stringify(result));
+
+  var passed = true;
+
+  // Assert config_version for Tier2
+  if (!result['Config_Tier2'] || result['Config_Tier2']['config_version'] !== 'v2.4.1') {
+    Logger.log('FAIL: Config_Tier2.config_version expected v2.4.1, got ' +
+      (result['Config_Tier2'] ? result['Config_Tier2']['config_version'] : 'missing block'));
+    passed = false;
+  }
+  // Assert numeric ou_min_conf
+  if (!result['Config_Tier2'] || result['Config_Tier2']['ou_min_conf'] !== 0.65) {
+    Logger.log('FAIL: ou_min_conf expected 0.65 (number), got ' +
+      (result['Config_Tier2'] ? result['Config_Tier2']['ou_min_conf'] : 'n/a'));
+    passed = false;
+  }
+  // Assert boolean TRUE
+  if (!result['Config_Tier2'] || result['Config_Tier2']['forebet_blend'] !== true) {
+    Logger.log('FAIL: forebet_blend expected true (boolean)');
+    passed = false;
+  }
+  // Assert cfgVersions
+  if (!result.__cfgVersions || result.__cfgVersions.tier2 !== 'v2.4.1') {
+    Logger.log('FAIL: __cfgVersions.tier2 missing or wrong');
+    passed = false;
+  }
+
+  Logger.log(passed ? '✅ selfTestBetSlipsConfigExtraction_ PASSED' : '❌ FAILED');
+};
+
+FleetImport_.selfTestStatsExtraction_ = function() {
+  var log = { info: Logger.log.bind(Logger), warn: Logger.log.bind(Logger) };
+  Logger.log('=== selfTestStatsExtraction_ ===');
+
+  // Fake Stats sheet 2D array
+  var fakeStats = [
+    ['Ma Golide Winner Accuracy (Historical)', '', '', ''],
+    ['League', 'Accuracy', 'Correct', 'Total'],
+    ['NBA',    '77.10%',   154,       200    ],
+    ['NFL',    '65.00%',   130,       200    ],
+    ['NHL',    '72.50%',   145,       200    ],
+    ['',       '',         '',        ''     ],
+    ['Probability Range Breakdown', '', '', ''],
+    ['Range',  'Accuracy', 'Correct', 'Total'],
+    ['55-60%', '58.00%',   58,        100   ],
+    ['60-65%', '70.00%',   70,        100   ],
+    ['65-70%', '80.00%',   80,        100   ],
+  ];
+
+  var mockSat = {
+    getSheets: function() {
+      return [{
+        getName: function() { return 'Stats'; },
+        getLastRow: function() { return fakeStats.length; },
+        getLastColumn: function() { return 4; },
+        getRange: function(r, c, nR, nC) {
+          return {
+            getValues: function() {
+              return fakeStats.slice(r - 1, r - 1 + nR).map(function(row) {
+                return row.slice(c - 1, c - 1 + nC);
+              });
+            }
+          };
+        }
+      }];
+    }
+  };
+
+  var result = FleetImport_._extractStatsSheet_(mockSat, log);
+  Logger.log('Stats extracted: ' + JSON.stringify(result));
+
+  var passed = true;
+
+  if (!result.winnerAccuracyByLeague || result.winnerAccuracyByLeague.length < 3) {
+    Logger.log('FAIL: winnerAccuracyByLeague missing or too short');
+    passed = false;
+  } else {
+    var nba = result.winnerAccuracyByLeague[0];
+    if (Math.abs((nba.accuracy || 0) - 0.771) > 0.001) {
+      Logger.log('FAIL: NBA accuracy expected 0.771, got ' + nba.accuracy);
+      passed = false;
+    }
+  }
+
+  if (!result.probRangeBreakdown || result.probRangeBreakdown.length < 3) {
+    Logger.log('FAIL: probRangeBreakdown missing or too short');
+    passed = false;
+  } else {
+    if (Math.abs((result.probRangeBreakdown[2].accuracy || 0) - 0.80) > 0.001) {
+      Logger.log('FAIL: 65-70% accuracy expected 0.80, got ' + result.probRangeBreakdown[2].accuracy);
+      passed = false;
+    }
+  }
+
+  Logger.log(passed ? '✅ selfTestStatsExtraction_ PASSED' : '❌ FAILED');
 };
 
 // ============================================================================
