@@ -977,11 +977,11 @@ const FleetImport_ = {
     }
     if (!bsSheet) { log.info('  Bet_Slips: not found'); return {}; }
 
-    // Single-fetch: read bounded window A1:E500 without using getDataRange()
+    // Single-fetch: read bounded window A1:J500 without using getDataRange()
     var data;
     try {
       var numRows = Math.min(bsSheet.getMaxRows(), 500);
-      var numCols = Math.min(bsSheet.getMaxColumns(), 5);
+      var numCols = Math.min(bsSheet.getMaxColumns(), 10);
       data = bsSheet.getRange(1, 1, numRows, numCols).getValues();
     } catch (e) { log.warn('  Bet_Slips read error: ' + e.message); return {}; }
 
@@ -1020,15 +1020,14 @@ const FleetImport_ = {
       var rowCells = row.map(function(c) { return String(c || '').trim(); });
       var foundBlockName = null;
       for (var ci = 0; ci < rowCells.length; ci++) {
-        var cellVal = rowCells[ci];
-        if (BLOCK_NAMES[cellVal]) {
-          foundBlockName = cellVal;
+        var txt = rowCells[ci];
+        if (/config[_ ]tier2|config[_ ]tier1|config[_ ]accumulator/i.test(txt)) {
+          var norm = txt.toUpperCase().replace(/[\s_]/g, '');
+          if (norm.indexOf('CONFIGTIER2') !== -1) foundBlockName = 'Config_Tier2';
+          else if (norm.indexOf('CONFIGTIER1') !== -1) foundBlockName = 'Config_Tier1';
+          else if (norm.indexOf('CONFIGACCUMULATOR') !== -1) foundBlockName = 'Config_Accumulator';
           break;
         }
-        var cellValNorm = cellVal.toUpperCase().replace(/[\s_]/g, '');
-        if (cellValNorm === 'CONFIGTIER2') { foundBlockName = 'Config_Tier2'; break; }
-        if (cellValNorm === 'CONFIGTIER1') { foundBlockName = 'Config_Tier1'; break; }
-        if (cellValNorm === 'CONFIGACCUMULATOR') { foundBlockName = 'Config_Accumulator'; break; }
       }
 
       if (foundBlockName) {
