@@ -348,9 +348,9 @@ const FleetImport_ = {
     if (!raw) return '';
     // Strip emoji/symbols, normalize win/loss variants
     const s = String(raw).replace(/[^\w\s]/g, '').trim().toUpperCase();
-    if (/^HIT|^WIN/.test(s) || s === 'W') return 'HIT';
-    if (/^MISS|^LOSS|^LOSE/.test(s) || s === 'L') return 'MISS';
-    if (/^PUSH|^VOID|^REFUND/.test(s)) return 'PUSH';
+    if (/^HIT|^WIN/.test(s) || s === 'W') return '✅ HIT';
+    if (/^MISS|^LOSS|^LOSE/.test(s) || s === 'L') return '❌ MISS';
+    if (/^PUSH|^VOID|^REFUND/.test(s)) return '🟡 PUSH';
     return String(raw).trim();
   },
 
