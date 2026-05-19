@@ -119,21 +119,25 @@ const FleetImport_ = {
 
       const startMs = Date.now();
       const HARD_MS = 6 * 60 * 1000;
-      const WRAP_BUFFER_MS = 120 * 1000;  // 2 minutes buffer
+      const WRAP_BUFFER_MS = 180 * 1000;  // 3 minutes wrap-up buffer (flush + report + log write)
       const deadlineMs = startMs + HARD_MS - WRAP_BUFFER_MS;
 
       // ◆ PATCH: build a set of active IDs from the fresh registry fetch for mid-run removal safety
       const activeSatIds = new Set(satList.map(s => s.id));
 
       for (let i = startIdx; i < satList.length; i++) {
+        // ── PRE-SATELLITE deadline guard ──────────────────────────────────
         if (Date.now() > deadlineMs) {
-          log.warn(`Time guard hit: elapsed=${(Date.now() - startMs) / 1000}s, buffer=${WRAP_BUFFER_MS / 1000}s`);
-          log.warn(`Time limit at satellite ${i}. Saving resume state.`);
+          const _nowPre = Date.now();
+          const _elapsedS = Math.round((_nowPre - startMs) / 1000);
+          const _remainS  = Math.round((startMs + HARD_MS - _nowPre) / 1000);
+          log.warn(`Time guard hit (pre-sat i=${i}): elapsed=${_elapsedS}s, remaining_in_hard_limit=${_remainS}s`);
+          log.warn(`Saving resume state at satellite index ${i} — will resume here next chunk.`);
           props.setProperty(this.PROP_RESUME_IDX, String(i));
           this._flushBuckets_(ss, buckets, log, report);
           this._writeRunReport_(ss, report, log);
           Log_.writeToSheet(ss);
-          this._installResumeTimer_(log);   // ← auto-resume in ~1 min
+          this._installResumeTimer_(log);
           return false;
         }
 
@@ -293,12 +297,29 @@ const FleetImport_ = {
           report.succeeded++;
 
           const tTotal = Date.now() - tStartLoop;
-          log.info(`[PERF] sat=${sat.id} open=${tOpen}ms ar=${tARRead}ms cfg=${tCfg}ms slips=${tBetSlips}ms stats=${tStats}ms route=${tRoute}ms total=${tTotal}ms`);
+          log.info(`[PERF] sat=${sat.name || sat.id} open=${tOpen}ms ar=${tARRead}ms cfg=${tCfg}ms slips=${tBetSlips}ms stats=${tStats}ms route=${tRoute}ms total=${tTotal}ms`);
 
         } catch (e) {
           log.error(`  → ERROR sat=${sat.id}: ${e.message}`);
           report.errors.push({ sat: sat.id, reason: e.message });
           report.skipped++;
+        }
+
+        // ── POST-SATELLITE deadline guard ─────────────────────────────────
+        // Runs even when a satellite is skipped/errored, so wrap-up time is
+        // not eaten by a large batch of failing opens right at the deadline.
+        if (Date.now() > deadlineMs) {
+          const _nowPost = Date.now();
+          const _elapsedS = Math.round((_nowPost - startMs) / 1000);
+          const _remainS  = Math.round((startMs + HARD_MS - _nowPost) / 1000);
+          log.warn(`Time guard hit (post-sat i=${i}): elapsed=${_elapsedS}s, remaining_in_hard_limit=${_remainS}s`);
+          log.warn(`Saving resume state at satellite index ${i + 1} — next chunk starts there.`);
+          props.setProperty(this.PROP_RESUME_IDX, String(i + 1));
+          this._flushBuckets_(ss, buckets, log, report);
+          this._writeRunReport_(ss, report, log);
+          Log_.writeToSheet(ss);
+          this._installResumeTimer_(log);
+          return false;
         }
       }
 
@@ -538,24 +559,28 @@ const FleetImport_ = {
           sh.insertRowsAfter(1, 1);
         }
 
-        // 3. Clear contents below header (from row 2 down to lastRow)
+        // 3. Clear contents below header across schema width only
+        //    (using H.length avoids blasting thousands of formatted-but-empty cols)
         const lastRow = sh.getLastRow();
-        const lastCol = Math.max(sh.getLastColumn(), H.length);
         if (lastRow >= 2) {
-          sh.getRange(2, 1, lastRow - 1, lastCol).clearContent();
+          sh.getRange(2, 1, lastRow - 1, H.length).clearContent();
         }
 
-        // 4. Trim rows but keep a buffer row 2
+        // 4. Trim rows: keep exactly 2 rows (header + one blank buffer)
         const updatedMaxRows = sh.getMaxRows();
         if (updatedMaxRows > 2) {
           sh.deleteRows(3, updatedMaxRows - 2);
         }
 
-        // 5. Trim columns beyond schema (to prevent width bloat)
+        // 5. Trim columns beyond schema width
         const maxCols = sh.getMaxColumns();
         if (maxCols > H.length) {
           sh.deleteColumns(H.length + 1, maxCols - H.length);
         }
+
+        // 6. Clear formatting on the single buffer row so it looks clean
+        //    (sheet is now exactly 2 rows × H.length cols — tiny range, safe)
+        sh.getRange(2, 1, 1, H.length).clearFormat();
 
         log.info('Cleared: ' + name);
       }
