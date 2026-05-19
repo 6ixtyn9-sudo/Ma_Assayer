@@ -11,6 +11,7 @@
 //   runFleetImportTest()   — test run: first 3 satellites
 //   runFleetImportResume() — resume a paused run
 //   resetFleetImport()     — clear resume state
+//   purgeSatellite(id)     — explicitly remove a satellite's data from all intake sheets
 //
 // ============================================================================
 
@@ -109,7 +110,18 @@ const FleetImport_ = {
 
     const deadline = Date.now() + 270000; // 4.5 min
 
+    // ◆ PATCH: build a set of active IDs from the fresh registry fetch for mid-run removal safety
+    const activeSatIds = new Set(satList.map(s => s.id));
+
     for (let i = startIdx; i < satList.length; i++) {
+      const sat = satList[i];
+
+      // ◆ PATCH: if resuming and a satellite was removed from the registry, skip it
+      if (opts.resume && !activeSatIds.has(sat.id)) {
+        log.info(`[${i+1}/${total}] ${sat.name} (${sat.id}) — SKIPPED_REMOVED (not in registry)`);
+        report.skipped++;
+        continue;
+      }
 
       if (Date.now() > deadline) {
         log.warn(`Time limit at satellite ${i}. Saving resume state.`);
@@ -477,6 +489,62 @@ const FleetImport_ = {
         log.info('Cleared: ' + name);
       }
     });
+  },
+
+  // ─── Purge specific satellite (No Ghosts) ───────────────────────────────────
+
+  purgeSatellite(ss, satelliteId, satelliteNameSubstring, log) {
+    log = log || Log_.module('FLEET_PURGE');
+    if (!satelliteId && !satelliteNameSubstring) {
+      log.warn("purgeSatellite requires either satelliteId or satelliteNameSubstring");
+      return;
+    }
+
+    log.info(`Purging satellite — ID: ${satelliteId || 'ANY'}, Name: ${satelliteNameSubstring || 'ANY'}`);
+    let totalDeleted = 0;
+
+    ss.getSheets().forEach(sh => {
+      const name = sh.getName();
+      if (this.MANAGED_SHEET_RE.test(name) && !this.PROTECTED_SHEETS.has(name)) {
+        const lastRow = sh.getLastRow();
+        const lastCol = sh.getLastColumn();
+        if (lastRow <= 1 || lastCol === 0) return;
+
+        const data = sh.getRange(1, 1, lastRow, lastCol).getValues();
+        const headers = data[0].map(h => String(h || '').trim().toLowerCase());
+        const idColIdx = headers.indexOf('satellite_id');
+        const nameColIdx = headers.indexOf('satellite_name');
+
+        if (idColIdx === -1 && nameColIdx === -1) return; // Not an intake sheet?
+
+        let deletedHere = 0;
+        // Iterate backwards to safely delete rows without messing up indices
+        for (let r = lastRow - 1; r >= 1; r--) {
+          const rowData = data[r];
+          const rowId = idColIdx !== -1 ? String(rowData[idColIdx] || '').trim() : '';
+          const rowName = nameColIdx !== -1 ? String(rowData[nameColIdx] || '').trim() : '';
+
+          let match = false;
+          if (satelliteId && rowId === String(satelliteId).trim()) {
+            match = true;
+          } else if (satelliteNameSubstring && rowName.includes(satelliteNameSubstring)) {
+            match = true;
+          }
+
+          if (match) {
+            sh.deleteRow(r + 1);
+            deletedHere++;
+            totalDeleted++;
+          }
+        }
+        
+        if (deletedHere > 0) {
+          log.info(`Purged ${deletedHere} rows from ${name}`);
+        }
+      }
+    });
+
+    log.success(`Purge complete. Total rows deleted across all managed tabs: ${totalDeleted}`);
   },
 
   // ─── Ensure tab exists with header row ───────────────────────────────────
@@ -1043,6 +1111,14 @@ const FleetImport_ = {
       }
     });
     props.deleteProperty(this.PROP_TRIGGER_ID);
+  },
+
+  cleanResumeTriggers_() {
+    this._cancelResumeTimer_();
+    const props = PropertiesService.getScriptProperties();
+    props.deleteProperty(this.PROP_RESUME_IDX);
+    props.deleteProperty(this.PROP_RUN_ID);
+    props.deleteProperty('FI_CHAIN_ASSAY');
   }
 };
 
@@ -1053,7 +1129,63 @@ const FleetImport_ = {
 function runFleetImportSelfTests() {
   FleetImport_.selfTestBetSlipsConfigExtraction_();
   FleetImport_.selfTestStatsExtraction_();
+  FleetImport_.selfTestPurge_();
 }
+
+FleetImport_.selfTestPurge_ = function() {
+  var log = { info: Logger.log.bind(Logger), warn: Logger.log.bind(Logger), success: Logger.log.bind(Logger) };
+  Logger.log('=== selfTestPurge_ ===');
+
+  var deletedCount = 0;
+  var fakeRows = [
+    ['satellite_id', 'satellite_name', 'league'],
+    ['sat_1', 'Target Sat', 'NBA'],
+    ['sat_2', 'Keep Me', 'NFL'],
+    ['sat_1', 'Target Sat', 'NHL'],
+    ['sat_3', 'Target Other', 'MLB']
+  ];
+
+  var mockSheet = {
+    getName: function() { return 'TEST_INTAKE'; },
+    getLastRow: function() { return fakeRows.length; },
+    getLastColumn: function() { return 3; },
+    getRange: function(r, c, nr, nc) {
+      return { getValues: function() { return fakeRows; } };
+    },
+    deleteRow: function(idx) {
+      deletedCount++;
+      fakeRows[idx - 1] = null; // simulate deletion
+    }
+  };
+
+  var mockSs = {
+    getSheets: function() { return [mockSheet]; }
+  };
+
+  FleetImport_.purgeSatellite(mockSs, 'sat_1', null, log);
+
+  var passed = true;
+  if (deletedCount !== 2) {
+    Logger.log('FAIL: Expected to delete 2 rows, got ' + deletedCount);
+    passed = false;
+  }
+
+  deletedCount = 0;
+  fakeRows = [
+    ['satellite_id', 'satellite_name', 'league'],
+    ['sat_1', 'Target Sat', 'NBA'],
+    ['sat_2', 'Keep Me', 'NFL'],
+    ['sat_3', 'Target Other', 'MLB']
+  ];
+
+  FleetImport_.purgeSatellite(mockSs, null, 'Target', log);
+  if (deletedCount !== 2) {
+    Logger.log('FAIL: Expected to delete 2 rows (substring), got ' + deletedCount);
+    passed = false;
+  }
+
+  Logger.log(passed ? '✅ selfTestPurge_ PASSED' : '❌ FAILED');
+};
 
 FleetImport_.selfTestBetSlipsConfigExtraction_ = function() {
   var log = { info: Logger.log.bind(Logger), warn: Logger.log.bind(Logger) };
@@ -1246,8 +1378,8 @@ function runFleetImportResume() {
   const log = Log_.module('FLEET_IMPORT');
   const done = FleetImport_.importAccuracyReports_(ss, { resume: true }, log);
   if (done !== false) {
-    // Completed — cancel any leftover timer
-    FleetImport_._cancelResumeTimer_();
+    // Completed — cancel any leftover timer and clean properties
+    FleetImport_.cleanResumeTriggers_();
     
     // Check if we need to chain into runAssay
     const props = PropertiesService.getScriptProperties();
@@ -1263,11 +1395,23 @@ function runFleetImportResume() {
 }
 
 function resetFleetImport() {
-  FleetImport_._cancelResumeTimer_();
-  const props = PropertiesService.getScriptProperties();
-  props.deleteProperty(FleetImport_.PROP_RESUME_IDX);
-  props.deleteProperty(FleetImport_.PROP_RUN_ID);
+  FleetImport_.cleanResumeTriggers_();
   Logger.log('FleetImport resume state + timer cleared.');
+}
+
+function purgeSatelliteAction() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt('Purge Satellite', 'Enter the exact Satellite ID to remove from intake tabs:', ui.ButtonSet.OK_CANCEL);
+  if (response.getSelectedButton() === ui.Button.OK) {
+    const id = response.getResponseText().trim();
+    if (id) {
+      Log_.init();
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      FleetImport_.purgeSatellite(ss, id, null);
+      Log_.writeToSheet(ss);
+      ui.alert('Purge complete. Check MA_Logs for details.');
+    }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

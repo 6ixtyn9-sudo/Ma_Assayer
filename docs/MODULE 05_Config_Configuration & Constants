@@ -23,9 +23,9 @@
 // ============================================================================
 
 const Config_ = {
-  version: "4.3.0",                    // ◆ PATCH: version bump
+  version: "5.0.0",                    // ◆ PATCH: version bump
   name: "Ma Assayer",
-  buildDate: "2025-06-28",             // ◆ PATCH: build date
+  buildDate: "2026-05-19",             // ◆ PATCH: build date
 
   // Sheet names
   sheets: {

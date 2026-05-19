@@ -59,10 +59,10 @@ const Main_ = {
     const leagueAssay = Stats_.assayLeagues(allBets, globalStats);
 
     // =========================================================
-    // PATCH: Team assay + Matchup assay (Side only)
+    // PATCH: Team assay + Matchup assay (Side + Fleet)
     // =========================================================
-    const teamAssay = Stats_.assayTeams(sideData.bets, globalStats);
-    const matchupAssay = Stats_.assayMatchups(sideData.bets, globalStats);
+    const teamAssay = Stats_.assayTeams(allBets, globalStats);
+    const matchupAssay = Stats_.assayMatchups(allBets, globalStats);
     
     // 5. Edge Discovery (Using patched Discovery_)
     const edges = Discovery_.discoverAll(sideData.bets, totalsData.bets, intakeData ? intakeData.bets : []);
@@ -120,8 +120,8 @@ const Main_ = {
      const leagueAssay = Stats_.assayLeagues(allBets, globalStats);
 
      // PATCH: team + matchup assays for flagger-only mode
-     const teamAssay = Stats_.assayTeams(sideData.bets, globalStats);
-     const matchupAssay = Stats_.assayMatchups(sideData.bets, globalStats);
+     const teamAssay = Stats_.assayTeams(allBets, globalStats);
+     const matchupAssay = Stats_.assayMatchups(allBets, globalStats);
 
      const edges = Discovery_.discoverAll(sideData.bets, totalsData.bets, intakeData ? intakeData.bets : []);
     

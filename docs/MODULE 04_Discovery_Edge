@@ -299,6 +299,8 @@ const Discovery_ = {
     if (!this.log) this.init();
     Log_.section("Discovering Edges");
 
+    this.log.info(`Discovery inputs: sideBets=${sideBets.length}, totalsBets=${totalsBets.length}, otherBets=${otherBets.length}`);
+
     const discovered = [];
     const t = Config_.thresholds;
 
@@ -601,7 +603,10 @@ const Discovery_ = {
           .sort((a, b) => keyCounts[b] - keyCounts[a])
           .slice(0, MAX_CFG_KEYS);
 
-        if (sortedKeys.length === 0) continue;
+        if (sortedKeys.length === 0) {
+          this.log.warn(`  Fleet[${typ}]: 0 threshold keys found. (Check if config_profile contains min/max/threshold/ev/confidence keys)`);
+          continue;
+        }
         this.log.info(`  Fleet[${typ}]: ${sortedKeys.length} threshold keys found`);
 
         for (const cfgKey of sortedKeys) {
@@ -675,6 +680,10 @@ const Discovery_ = {
     this.log.info(
       `Discovery complete: ${unique.length} unique edges from ${discovered.length} raw (${elapsedMs}ms)`
     );
+
+    if (otherBets.length > 0 && unique.length === 0) {
+      this.log.warn("No edges met thresholds; check minN, lift, key caps, and ensure config_profile contains threshold keys.");
+    }
 
     const gradeCounts = {};
     unique.forEach(e => { gradeCounts[e.grade] = (gradeCounts[e.grade] || 0) + 1; });
