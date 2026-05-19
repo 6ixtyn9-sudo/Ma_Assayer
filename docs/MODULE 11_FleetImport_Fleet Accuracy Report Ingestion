@@ -133,7 +133,6 @@ const FleetImport_ = {
         return false;
       }
 
-      const sat = satList[i];
       report.attempted++;
       log.info(`[${i+1}/${total}] ${sat.name} (${sat.id})`);
 
