@@ -183,9 +183,11 @@ const Config_ = {
       "per", "prd", "segment", "half"
     ],
     direction: [
+      // NOTE: do NOT add "outcome", "result", "res" here — those belong to their
+      // own canonicals and will cause exact-match theft in ColResolver Pass 1.
       "direction", "dir", "over/under", "overunder", "o/u", "ou", "bet dir",
-      "over under", "over or under", "o or u", "side", "pick direction",
-      "outcome", "result", "res", "ou result", "ou dir"
+      "over under", "over or under", "o or u", "pick direction",
+      "ou result", "ou dir"
     ],
     line: [
       "line", "ln", "total", "total line", "number", "lne", "points",

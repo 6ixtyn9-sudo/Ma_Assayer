@@ -286,6 +286,86 @@ const ColResolver_ = {
    */
   hasColumn(resolved, colName) {
     return resolved.hasOwnProperty(colName) && resolved[colName] >= 0;
+  },
+  // ─── Self-test harness ────────────────────────────────────────────────────
+  //
+  // Verifies the two canonical collision bugs are not regressed:
+  //   1. time  must NOT resolve to "EV"
+  //   2. direction must NOT resolve to "Outcome"
+  //   3. ev    MUST resolve to "EV"
+  //   4. outcome MUST resolve to "Outcome"
+  //   5. result MUST resolve to "Result"
+  //
+  // Run from the Apps Script editor: select "runColResolverSelfTest" from the
+  // function dropdown and click Run. All results appear in the Execution Log.
+  //
+  selfTest_() {
+    if (!this.log) this.init();
+    const log = this.log;
+
+    log.info('═══ ColResolver_.selfTest_() ═══');
+
+    // Canonical test header row matching the acceptance criteria
+    const headerRow = [
+      'League','Date','Match','Pick','Type','Odds',
+      'Confidence','EV','Tier','Result','Score','Winner','Outcome'
+    ];
+    // Expected 0-based indices: EV=7, Result=9, Outcome=12
+
+    // Merge side + totals aliases exactly as FleetImport_ does
+    const ALIASES = {};
+    for (const k in Config_.sideColumnAliases) {
+      ALIASES[k] = [...Config_.sideColumnAliases[k]];
+    }
+    for (const k in Config_.totalsColumnAliases) {
+      if (ALIASES[k]) {
+        ALIASES[k] = Array.from(new Set([...ALIASES[k], ...Config_.totalsColumnAliases[k]]));
+      } else {
+        ALIASES[k] = [...Config_.totalsColumnAliases[k]];
+      }
+    }
+
+    const { resolved, missing, found } = ColResolver_.resolve(headerRow, ALIASES, 'SELF_TEST');
+
+    log.info('── Resolved map ──');
+    for (const [canon, idx] of Object.entries(resolved)) {
+      log.info(`  ${canon} → col ${idx + 1} ("${headerRow[idx]}")`);
+    }
+    if (missing.length) log.warn('Missing: ' + missing.join(', '));
+
+    // Assertions
+    const PASS = '✅ PASS';
+    const FAIL = '❌ FAIL';
+    let allPassed = true;
+
+    function assert(label, condition) {
+      const result = condition ? PASS : FAIL;
+      if (!condition) allPassed = false;
+      log.info(`  ${result}  ${label}`);
+    }
+
+    log.info('── Assertions ──');
+    assert('ev resolves to "EV" (col 8)',            resolved['ev'] === 7);
+    assert('time does NOT steal "EV"',               resolved['time'] !== 7);
+    assert('outcome resolves to "Outcome" (col 13)', resolved['outcome'] === 12);
+    assert('direction does NOT steal "Outcome"',     resolved['direction'] !== 12);
+    assert('result resolves to "Result" (col 10)',   resolved['result'] === 9);
+
+    log.info(allPassed
+      ? '═══ ALL TESTS PASSED ✅ ═══'
+      : '═══ SOME TESTS FAILED — review log above ❌ ═══');
+
+    return allPassed;
   }
+
 };
+
+// ─── Menu-callable self-test wrapper ─────────────────────────────────────────
+function runColResolverSelfTest() {
+  Log_.init();
+  ColResolver_.init();
+  const passed = ColResolver_.selfTest_();
+  Log_.writeToSheet(SpreadsheetApp.getActiveSpreadsheet());
+  if (!passed) throw new Error('ColResolver self-test FAILED — check MA_Logs for details.');
+}
 
