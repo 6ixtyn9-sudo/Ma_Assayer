@@ -987,23 +987,18 @@ const FleetImport_ = {
 
     if (data.length === 0 || data[0].length === 0) { log.info('  Bet_Slips: empty'); return {}; }
 
-    // Block headers we care about
-    var BLOCK_NAMES = { 'Config_Tier2': true, 'Config_Tier1': true, 'Config_Accumulator': true };
-
     // Bet-table stop tokens (stop if >= 5 match)
     var BET_HEADER_TOKENS = ['league','date','match','pick','type','odds','confidence','ev','tier','result','outcome'];
 
     var result = {};
     var currentBlock = null;
+    var keyColIndex = 0;
     var blocksFound = [];
     var rowsInBlock = 0;
     var MAX_ROWS_PER_BLOCK = 80;
 
     for (var r = 0; r < data.length; r++) {
       var row = data[r];
-      var colA = String(row[0] === null || row[0] === undefined ? '' : row[0]).trim();
-      var colB = row.length > 1 ? row[1] : '';
-      var colC = row.length > 2 ? row[2] : '';
 
       // Stop condition: bet-table header detected
       var rowJoined = row.map(function(c) { return String(c || '').toLowerCase(); }).join('|');
@@ -1019,23 +1014,56 @@ const FleetImport_ = {
       // New block start? Scan all cells of a row to catch layouts where it might be shifted or share a row
       var rowCells = row.map(function(c) { return String(c || '').trim(); });
       var foundBlockName = null;
+      var foundBlockCol = -1;
       for (var ci = 0; ci < rowCells.length; ci++) {
         var txt = rowCells[ci];
-        if (/config[_ ]tier2|config[_ ]tier1|config[_ ]accumulator/i.test(txt)) {
-          var norm = txt.toUpperCase().replace(/[\s_]/g, '');
-          if (norm.indexOf('CONFIGTIER2') !== -1) foundBlockName = 'Config_Tier2';
-          else if (norm.indexOf('CONFIGTIER1') !== -1) foundBlockName = 'Config_Tier1';
-          else if (norm.indexOf('CONFIGACCUMULATOR') !== -1) foundBlockName = 'Config_Accumulator';
+        if (/config[_\s-]*tier[_\s-]*2/i.test(txt)) {
+          foundBlockName = 'Config_Tier2';
+          foundBlockCol = ci;
+          break;
+        } else if (/config[_\s-]*tier[_\s-]*1/i.test(txt)) {
+          foundBlockName = 'Config_Tier1';
+          foundBlockCol = ci;
+          break;
+        } else if (/config[_\s-]*accumulator/i.test(txt)) {
+          foundBlockName = 'Config_Accumulator';
+          foundBlockCol = ci;
           break;
         }
       }
 
       if (foundBlockName) {
         currentBlock = foundBlockName;
+        keyColIndex = foundBlockCol;
         rowsInBlock  = 0;
         if (!result[currentBlock]) {
           result[currentBlock] = { __comments: {} };
           blocksFound.push(currentBlock);
+        }
+
+        // Check if there is a key-value pair on this SAME row to the right of the block header
+        var remainingCells = row.slice(keyColIndex + 1);
+        for (var ri = 0; ri < remainingCells.length - 1; ri++) {
+          var possibleKey = String(remainingCells[ri] === null || remainingCells[ri] === undefined ? '' : remainingCells[ri]).trim();
+          if (possibleKey && !possibleKey.startsWith('//') && !possibleKey.startsWith('-')) {
+            var possibleVal = remainingCells[ri + 1];
+            if (possibleVal === '' || possibleVal === null || possibleVal === undefined) {
+              if (ri + 2 < remainingCells.length) {
+                possibleVal = remainingCells[ri + 2];
+              }
+            }
+            var normVal = this._normalizeCellValue_(possibleVal);
+            if (normVal !== undefined && normVal !== '') {
+              result[currentBlock][possibleKey] = normVal;
+              var possibleComment = '';
+              if (ri + 2 < remainingCells.length && remainingCells[ri + 2] !== possibleVal) {
+                possibleComment = String(remainingCells[ri + 2] || '').trim();
+              }
+              if (possibleComment) result[currentBlock].__comments[possibleKey] = possibleComment;
+              rowsInBlock++;
+              break;
+            }
+          }
         }
         continue;
       }
@@ -1043,9 +1071,17 @@ const FleetImport_ = {
       if (!currentBlock) continue;
       if (rowsInBlock >= MAX_ROWS_PER_BLOCK) continue;
 
+      // Extract key relative to keyColIndex
+      var colA = row.length > keyColIndex ? String(row[keyColIndex] === null || row[keyColIndex] === undefined ? '' : row[keyColIndex]).trim() : '';
+      var colB = row.length > keyColIndex + 1 ? row[keyColIndex + 1] : '';
+      var colC = row.length > keyColIndex + 2 ? row[keyColIndex + 2] : '';
+
       // Divider rows: skip
       if (colA.startsWith('---') || colA.indexOf('═══') !== -1 ||
           colA.startsWith('===') || colA.startsWith('***')) continue;
+
+      // Skip comment lines
+      if (colA.startsWith('//')) continue;
 
       // Skip rows where colA contains 'key' and colB contains 'value' (column header)
       if (colA.toLowerCase() === 'key' &&
