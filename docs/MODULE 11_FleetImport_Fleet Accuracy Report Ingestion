@@ -167,9 +167,18 @@ const FleetImport_ = {
 
         if (report.succeeded === 0) report.sampleResolved = resolved;
 
-        // Must have at least date + (match or pick)
+        const resolvedCount = Object.keys(resolved).length;
+        if (resolvedCount < 4) {
+          log.warn(`  → Schema anomaly: only ${resolvedCount} canonicals resolved. Flagging satellite.`);
+          report.errors.push({ sat: sat.id, reason: `SCHEMA_ANOMALY: Only ${resolvedCount} recognizable columns` });
+          report.skipped++;
+          continue;
+        }
+
+        // Must have at least date
         if (resolved['date'] === undefined) {
-          log.warn(`  → No date column. Skipping.`);
+          log.warn(`  → No date column. Flagging satellite.`);
+          report.errors.push({ sat: sat.id, reason: `SCHEMA_ANOMALY: Missing canonical 'date' column` });
           report.skipped++;
           continue;
         }
