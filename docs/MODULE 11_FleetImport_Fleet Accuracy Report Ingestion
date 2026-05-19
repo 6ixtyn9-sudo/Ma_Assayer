@@ -663,3 +663,41 @@ function clearAllIntakeData() {
   if (log.info) log.info(`Cleared ${cleared.length} intake sheets. Resume state reset.`);
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DIAGNOSTIC: count every unique type value in the UNKNOWN sheet.
+// Run once from the editor — results appear in the execution log.
+// Paste the sanitized values into TYPE_CANONICAL to eliminate UNKNOWN rows.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function auditUnknownTypes() {
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('UNKNOWN');
+  if (!sheet) { Logger.log('No UNKNOWN sheet found.'); return; }
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) { Logger.log('UNKNOWN sheet is empty.'); return; }
+
+  const headers = data[0].map(h => String(h).toLowerCase().trim());
+  const typeCol = headers.indexOf('type');
+  if (typeCol === -1) { Logger.log('No "type" column found.'); return; }
+
+  const counts = {};
+  for (let r = 1; r < data.length; r++) {
+    const val = String(data[r][typeCol] || '').trim();
+    if (val) counts[val] = (counts[val] || 0) + 1;
+  }
+
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+
+  Logger.log('==== UNKNOWN type audit (' + (data.length - 1) + ' rows, ' + sorted.length + ' unique types) ====');
+  sorted.forEach(function([type, n]) {
+    const sanitized = type.toUpperCase()
+      .replace(/[^A-Z0-9]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '')
+      .slice(0, 25);
+    Logger.log('  ' + String(n).padStart(4) + 'x  "' + type + '"  =>  "' + sanitized + '"');
+  });
+  Logger.log('==== End of audit ====');
+}
