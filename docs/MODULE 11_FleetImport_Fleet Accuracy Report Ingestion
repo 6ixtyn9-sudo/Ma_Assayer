@@ -190,20 +190,33 @@ const FleetImport_ = {
           // Skip banner / log / summary rows
           const firstNonEmpty = raw.find(c => c !== '' && c !== null && c !== undefined);
           const firstStr = String(firstNonEmpty || '').trim();
+          const fullRowStr = raw.join(' ').toLowerCase();
+          
           if (
             firstStr.startsWith('═') ||
             firstStr.startsWith('---') ||
-            /^(source sheet|total bets|matched to|hits?:|misses?:|pushes|hit rate|metric|raw log|unique pred|\(no match)/i.test(firstStr)
+            /^(source sheet|total bets|matched to|hits?:|misses?:|pushes|hit rate|metric|raw log|unique pred|\(no match)/i.test(firstStr) ||
+            fullRowStr.includes('source sheet:') ||
+            fullRowStr.includes('--- bet details ---') ||
+            fullRowStr.includes('═══')
           ) {
             satSkipped++;
             continue;
           }
 
           // Skip header-echo rows
-          const rawTypeCell = (typeColIdx !== undefined && typeColIdx >= 0 && typeColIdx < raw.length)
-            ? String(raw[typeColIdx] || '').trim().toLowerCase()
-            : '';
-          if (rawTypeCell === 'type' || rawTypeCell === 'market' || rawTypeCell === 'bet type') {
+          const getRaw = (canon) => {
+            const idx = resolved[canon];
+            return (idx !== undefined && idx >= 0 && idx < raw.length) ? String(raw[idx] || '').trim().toLowerCase() : '';
+          };
+          
+          const rawType = getRaw('type');
+          if (rawType === 'type' || rawType === 'market' || rawType === 'bet type') {
+            satSkipped++;
+            continue;
+          }
+          
+          if (getRaw('league') === 'league' && getRaw('date') === 'date') {
             satSkipped++;
             continue;
           }
