@@ -21,7 +21,7 @@ const FleetImport_ = {
   REGISTRY_URL: 'https://raw.githubusercontent.com/6ixtyn9-sudo/gold-universe-orchestrator/main/registry/registry.json',
   FOLDER_ID:    '1fZYPWLG1OKTnML0Yil82y4cAI-ioli0K',
   // Regex that identifies sheets we own (ALL_CAPS_WITH_UNDERSCORES, ≥3 chars)
-  MANAGED_SHEET_RE: /^[A-Z][A-Z0-9_]{2,}$/,
+  MANAGED_SHEET_RE: /^[A-Z0-9][A-Z0-9_]{2,}$/,
 
   // Sheets that must never be cleared, even if they match the regex
   PROTECTED_SHEETS: new Set([
