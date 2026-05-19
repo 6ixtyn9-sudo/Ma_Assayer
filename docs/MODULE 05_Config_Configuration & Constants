@@ -128,7 +128,7 @@ const Config_ = {
       "location", "venue", "home or away", "h or a"
     ],
     outcome: [
-      "outcome", "result", "res", "win/loss", "winloss", "w/l", "hit",
+      "outcome", "win/loss", "winloss", "w/l", "hit",
       "otcome", "outcom", "status", "graded result", "grade", "graded",
       "final result", "bet result", "wager result", "decision", "verdict"
     ],
@@ -184,7 +184,8 @@ const Config_ = {
     ],
     direction: [
       "direction", "dir", "over/under", "overunder", "o/u", "ou", "bet dir",
-      "over under", "over or under", "o or u", "side", "pick direction"
+      "over under", "over or under", "o or u", "side", "pick direction",
+      "outcome", "result", "res", "ou result", "ou dir"
     ],
     line: [
       "line", "ln", "total", "total line", "number", "lne", "points",
