@@ -111,6 +111,7 @@ const FleetImport_ = {
         this._flushBuckets_(ss, buckets, log, report);
         this._writeRunReport_(ss, report, log);
         Log_.writeToSheet(ss);
+        this._installResumeTimer_(log);   // ← auto-resume in ~1 min
         return false;
       }
 
@@ -553,6 +554,37 @@ const FleetImport_ = {
 
     sheet.getRange(2, 1, rows.length, 2).setValues(rows);
     log.info('Run report written to ' + TAB);
+  },
+
+  // ─── Auto-resume timer ────────────────────────────────────────────────────
+
+  PROP_TRIGGER_ID: 'FI_TRIGGER_ID',
+
+  _installResumeTimer_(log) {
+    // Cancel any existing timer first
+    this._cancelResumeTimer_();
+    try {
+      const trigger = ScriptApp
+        .newTrigger('runFleetImportResume')
+        .timeBased()
+        .after(60 * 1000)   // fire ~1 minute from now
+        .create();
+      PropertiesService.getScriptProperties()
+        .setProperty(this.PROP_TRIGGER_ID, trigger.getUniqueId());
+      if (log) log.info('Auto-resume trigger scheduled (≈1 min).');
+    } catch (e) {
+      if (log) log.warn('Could not install resume trigger: ' + e.message);
+    }
+  },
+
+  _cancelResumeTimer_() {
+    const props   = PropertiesService.getScriptProperties();
+    const oldId   = props.getProperty(this.PROP_TRIGGER_ID);
+    if (!oldId) return;
+    ScriptApp.getProjectTriggers().forEach(t => {
+      if (t.getUniqueId() === oldId) ScriptApp.deleteTrigger(t);
+    });
+    props.deleteProperty(this.PROP_TRIGGER_ID);
   }
 };
 
@@ -578,15 +610,56 @@ function runFleetImportTest() {
 }
 
 function runFleetImportResume() {
+  // Cancel the trigger that fired us so it doesn't stack
+  FleetImport_._cancelResumeTimer_();
   Log_.init();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  FleetImport_.importAccuracyReports_(ss, { resume: true }, Log_.module('FLEET_IMPORT'));
+  const ss  = SpreadsheetApp.getActiveSpreadsheet();
+  const log = Log_.module('FLEET_IMPORT');
+  const done = FleetImport_.importAccuracyReports_(ss, { resume: true }, log);
+  if (done !== false) {
+    // Completed — cancel any leftover timer
+    FleetImport_._cancelResumeTimer_();
+  }
   Log_.writeToSheet(ss);
 }
 
 function resetFleetImport() {
+  FleetImport_._cancelResumeTimer_();
   const props = PropertiesService.getScriptProperties();
   props.deleteProperty(FleetImport_.PROP_RESUME_IDX);
   props.deleteProperty(FleetImport_.PROP_RUN_ID);
-  Logger.log('FleetImport resume state cleared.');
+  Logger.log('FleetImport resume state + timer cleared.');
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEBUG UTILITY: wipe all intake sheets + reset state for a clean run
+// ─────────────────────────────────────────────────────────────────────────────
+
+function clearAllIntakeData() {
+  FleetImport_._cancelResumeTimer_();
+
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty(FleetImport_.PROP_RESUME_IDX);
+  props.deleteProperty(FleetImport_.PROP_RUN_ID);
+
+  const ss      = SpreadsheetApp.getActiveSpreadsheet();
+  const log     = Log_.module ? Log_.module('CLEAR') : console;
+  const sheets  = ss.getSheets();
+  const cleared = [];
+
+  sheets.forEach(sh => {
+    const name = sh.getName();
+    if (
+      FleetImport_.MANAGED_SHEET_RE.test(name) &&
+      !FleetImport_.PROTECTED_SHEETS.has(name) &&
+      name !== 'MA_ImportReport'
+    ) {
+      sh.clearContents();
+      cleared.push(name);
+    }
+  });
+
+  Logger.log(`clearAllIntakeData: cleared ${cleared.length} sheets — ${cleared.join(', ')}`);
+  if (log.info) log.info(`Cleared ${cleared.length} intake sheets. Resume state reset.`);
+}
+
