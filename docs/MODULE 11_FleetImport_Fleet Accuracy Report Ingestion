@@ -73,6 +73,12 @@ const FleetImport_ = {
     let startIdx = 0;
     if (opts.resume) {
       startIdx = parseInt(props.getProperty(this.PROP_RESUME_IDX) || '0', 10);
+      // If already complete, bail out cleanly — do not overwrite the report
+      if (startIdx >= satList.length) {
+        log.info('Fleet import already complete — nothing to resume.');
+        props.deleteProperty(this.PROP_RESUME_IDX);
+        return true;
+      }
       log.info(`Resuming from index ${startIdx}`);
     } else {
       props.deleteProperty(this.PROP_RESUME_IDX);
@@ -578,11 +584,14 @@ const FleetImport_ = {
   },
 
   _cancelResumeTimer_() {
-    const props   = PropertiesService.getScriptProperties();
-    const oldId   = props.getProperty(this.PROP_TRIGGER_ID);
-    if (!oldId) return;
+    const props = PropertiesService.getScriptProperties();
+    const oldId = props.getProperty(this.PROP_TRIGGER_ID);
+    // Delete ALL runFleetImportResume triggers (not just the stored ID)
+    // — this prevents stale triggers from piling up across sessions
     ScriptApp.getProjectTriggers().forEach(t => {
-      if (t.getUniqueId() === oldId) ScriptApp.deleteTrigger(t);
+      if (t.getHandlerFunction() === 'runFleetImportResume') {
+        ScriptApp.deleteTrigger(t);
+      }
     });
     props.deleteProperty(this.PROP_TRIGGER_ID);
   }
