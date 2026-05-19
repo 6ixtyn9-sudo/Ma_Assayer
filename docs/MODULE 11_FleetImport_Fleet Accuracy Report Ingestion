@@ -3,8 +3,8 @@
 // VERSION: 2.0.0
 // ============================================================================
 //
-// DESIGN: Every bet type gets its own sheet — INTAKE__BANKER, INTAKE__SNIPER_OU,
-//         INTAKE__SNIPER_MARGIN, etc. No Side/Totals routing. One universal schema.
+// DESIGN: Every bet type gets its own sheet — BANKER, SNIPER_OU,
+//         SNIPER_MARGIN, FT_O_U, ROBBER, etc. No Side/Totals routing. One universal schema.
 //
 // ENTRY POINTS:
 //   runFleetImportOnly()   — import all satellites
@@ -20,7 +20,8 @@ const FleetImport_ = {
 
   REGISTRY_URL: 'https://raw.githubusercontent.com/6ixtyn9-sudo/gold-universe-orchestrator/main/registry/registry.json',
   FOLDER_ID:    '1fZYPWLG1OKTnML0Yil82y4cAI-ioli0K',
-  MARKET_PREFIX: 'INTAKE__',
+  // Regex that identifies sheets we own (ALL_CAPS_WITH_UNDERSCORES, ≥3 chars)
+  MANAGED_SHEET_RE: /^[A-Z][A-Z0-9_]{2,}$/,
 
   PROP_RESUME_IDX: 'FI_RESUME_IDX',
   PROP_RUN_ID:     'FI_RUN_ID',
@@ -28,7 +29,7 @@ const FleetImport_ = {
   // Accuracy_Report tab name variants
   AR_TAB_ALIASES: ['Accuracy_Report', 'AccuracyReport', 'Accuracy Report', 'accuracy_report'],
 
-  // Universal schema — every INTAKE__ sheet uses this
+  // Universal schema — every type sheet uses this
   INTAKE_HEADERS: [
     'satellite_id', 'satellite_name', 'league', 'date', 'match',
     'pick', 'type', 'quarter', 'direction', 'line',
@@ -83,7 +84,7 @@ const FleetImport_ = {
       sampleHeaders: null, sampleResolved: null
     };
 
-    // buckets: { 'INTAKE__BANKER': [ {key, data}, … ], … }
+    // buckets: { 'BANKER': [ {key, data}, … ], 'SNIPER_OU': [...], … }
     const buckets = {};
 
     if (!opts.resume && opts.clearBeforeImport !== false) {
@@ -235,14 +236,14 @@ const FleetImport_ = {
 
   _typeToTab_(rawType) {
     const s = String(rawType || 'UNKNOWN').trim();
-    if (!s) return this.MARKET_PREFIX + 'UNKNOWN';
+    if (!s) return 'UNKNOWN';
     const sanitized = s
       .toUpperCase()
       .replace(/[^A-Z0-9]/g, '_')
       .replace(/_+/g, '_')
       .replace(/^_|_$/g, '')
       .slice(0, 25);
-    return this.MARKET_PREFIX + (sanitized || 'UNKNOWN');
+    return sanitized || 'UNKNOWN';
   },
 
   // ─── Build universal row object ───────────────────────────────────────────
@@ -331,11 +332,11 @@ const FleetImport_ = {
     }
   },
 
-  // ─── Clear all INTAKE__ tabs ─────────────────────────────────────────────
+  // ─── Clear all managed type tabs ─────────────────────────────────────────────
 
   _clearIntakeTabs_(ss, log) {
     ss.getSheets().forEach(sh => {
-      if (sh.getName().startsWith(this.MARKET_PREFIX)) {
+      if (this.MANAGED_SHEET_RE.test(sh.getName())) {
         const last = sh.getLastRow();
         if (last > 1) sh.deleteRows(2, last - 1);
         log.info('Cleared: ' + sh.getName());
