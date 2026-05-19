@@ -65,7 +65,7 @@ const Main_ = {
     const matchupAssay = Stats_.assayMatchups(sideData.bets, globalStats);
     
     // 5. Edge Discovery (Using patched Discovery_)
-    const edges = Discovery_.discoverAll(sideData.bets, totalsData.bets);
+    const edges = Discovery_.discoverAll(sideData.bets, totalsData.bets, intakeData ? intakeData.bets : []);
     
     // 6. Exclusion Analysis
     const exclusionImpact = Stats_.calcExclusionImpact(allBets, globalStats);
@@ -123,7 +123,7 @@ const Main_ = {
      const teamAssay = Stats_.assayTeams(sideData.bets, globalStats);
      const matchupAssay = Stats_.assayMatchups(sideData.bets, globalStats);
 
-     const edges = Discovery_.discoverAll(sideData.bets, totalsData.bets);
+     const edges = Discovery_.discoverAll(sideData.bets, totalsData.bets, intakeData ? intakeData.bets : []);
     
      // PATCH: pass assays
      Flagger_.applyFlags(ss, edges, leagueAssay, teamAssay, matchupAssay);
