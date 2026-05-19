@@ -23,6 +23,14 @@ const FleetImport_ = {
   // Regex that identifies sheets we own (ALL_CAPS_WITH_UNDERSCORES, ≥3 chars)
   MANAGED_SHEET_RE: /^[A-Z][A-Z0-9_]{2,}$/,
 
+  // Sheets that must never be cleared, even if they match the regex
+  PROTECTED_SHEETS: new Set([
+    'ASSAYER_EDGES', 'ASSAYER_LEAGUE_PURITY',
+    'MA_LOGS', 'MA_DISCOVERY', 'MA_VAULT',
+    'MA_SUMMARY', 'MA_CONFIG', 'MA_CHARTS',
+    'MA_IMPORT_REPORT'
+  ]),
+
   PROP_RESUME_IDX: 'FI_RESUME_IDX',
   PROP_RUN_ID:     'FI_RUN_ID',
 
@@ -336,10 +344,11 @@ const FleetImport_ = {
 
   _clearIntakeTabs_(ss, log) {
     ss.getSheets().forEach(sh => {
-      if (this.MANAGED_SHEET_RE.test(sh.getName())) {
+      const name = sh.getName();
+      if (this.MANAGED_SHEET_RE.test(name) && !this.PROTECTED_SHEETS.has(name)) {
         const last = sh.getLastRow();
         if (last > 1) sh.deleteRows(2, last - 1);
-        log.info('Cleared: ' + sh.getName());
+        log.info('Cleared: ' + name);
       }
     });
   },
