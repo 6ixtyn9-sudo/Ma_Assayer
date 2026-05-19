@@ -1269,7 +1269,12 @@ const Parser_ = {
         bet.isWomen = this.isWomenLeague(bet.league, bet.match);
         if (bet.isWomen) womenIntakeCount++; else menIntakeCount++;
 
-        this.enrichSideBetWithTeams_(bet, row, resolved);
+        const isOU = bet.direction === 'O' || bet.direction === 'U' || 
+                     (bet.typeKey && bet.typeKey.includes('O_U')) || 
+                     (bet.typeKey && bet.typeKey.includes('_OU'));
+        if (!isOU) {
+          this.enrichSideBetWithTeams_(bet, row, resolved);
+        }
 
         allBets.push(bet);
         parsed++;

@@ -604,7 +604,21 @@ const Discovery_ = {
           .slice(0, MAX_CFG_KEYS);
 
         if (sortedKeys.length === 0) {
+          // Gating dump
+          const allKeyCounts = {};
+          for (const b of typedBets) {
+            const flat = this._getCfgFlat_(b);
+            for (const k in flat) {
+              allKeyCounts[k] = (allKeyCounts[k] || 0) + 1;
+            }
+          }
+          const top5Keys = Object.keys(allKeyCounts)
+            .sort((a, b) => allKeyCounts[b] - allKeyCounts[a])
+            .slice(0, 5);
+
           this.log.warn(`  Fleet[${typ}]: 0 threshold keys found. (Check if config_profile contains min/max/threshold/ev/confidence keys)`);
+          this.log.info(`  [DEBUG] Gating Dump for ${typ}: minN=${t.minN}, minLift=${t.liftThreshold}, MAX_CFG_KEYS=${MAX_CFG_KEYS}, MAX_BUCKETS=${MAX_BUCKETS}`);
+          this.log.info(`  [DEBUG] Top 5 all-keys detected: ${top5Keys.map(k => `${k}(${allKeyCounts[k]})`).join(', ')}`);
           continue;
         }
         this.log.info(`  Fleet[${typ}]: ${sortedKeys.length} threshold keys found`);

@@ -169,6 +169,9 @@ const ColResolver_ = {
       for (const header of normalizedHeaders) {
         if (!header.normalized || usedIndices.has(header.index)) continue;
         
+        // Intake safeguard: prevent 'satellite_id' from ever matching 'side'
+        if (canonical === 'side' && header.normalized.includes('satellite')) continue;
+        
         let exactMatchedAlias = null;
         for (const alias of aliases) {
           if (header.normalized === this.normalize(alias)) {
@@ -206,6 +209,9 @@ const ColResolver_ = {
       // Check each header against each alias
       for (const header of normalizedHeaders) {
         if (!header.normalized || usedIndices.has(header.index)) continue;
+        
+        // Intake safeguard: prevent 'satellite_id' from ever matching 'side'
+        if (canonical === 'side' && header.normalized.includes('satellite')) continue;
         
         for (const alias of aliases) {
           const normalizedAlias = this.normalize(alias);
