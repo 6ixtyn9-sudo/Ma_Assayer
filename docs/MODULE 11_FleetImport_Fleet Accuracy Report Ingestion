@@ -42,7 +42,7 @@ const FleetImport_ = {
     'satellite_id', 'satellite_name', 'league', 'date', 'match',
     'pick', 'type', 'quarter', 'direction', 'line',
     'confidence', 'tier', 'odds', 'outcome', 'actual',
-    'home', 'away', 'units', 'ev', 'notes', 'imported_at'
+    'home', 'away', 'units', 'ev', 'notes', 'config_profile', 'imported_at'
   ],
 
   // Header detection tokens
@@ -135,7 +135,7 @@ const FleetImport_ = {
           continue;
         }
 
-        const { headers, rows, headerIdx } = result;
+        const { headers, rows, headerIdx, configSnapshot } = result;
 
         if (headerIdx === -1 || rows.length === 0) {
           report.headerFails++;
@@ -230,7 +230,7 @@ const FleetImport_ = {
             continue;
           }
 
-          const rowObj = this._buildRowObj_(raw, resolved, sat);
+          const rowObj = this._buildRowObj_(raw, resolved, sat, configSnapshot);
           const tabName = this._typeToTab_(rowObj.type);
 
           const keyParts = [
@@ -377,7 +377,7 @@ const FleetImport_ = {
 
   // ─── Build universal row object ───────────────────────────────────────────
 
-  _buildRowObj_(raw, resolved, sat) {
+  _buildRowObj_(raw, resolved, sat, configSnapshot) {
     const get = (canon) => {
       const idx = resolved[canon];
       return (idx !== undefined && idx >= 0 && idx < raw.length)
@@ -417,7 +417,8 @@ const FleetImport_ = {
       away,
       units:          get('units'),
       ev:             get('ev'),
-      notes:          get('notes')
+      notes:          get('notes'),
+      config_profile: configSnapshot || '{}'
     };
   },
 
@@ -428,7 +429,7 @@ const FleetImport_ = {
       o.satellite_id, o.satellite_name, o.league, o.date, o.match,
       o.pick, o.type, o.quarter, o.direction, o.line,
       o.confidence, o.tier, o.odds, o.outcome, o.actual,
-      o.home, o.away, o.units, o.ev, o.notes,
+      o.home, o.away, o.units, o.ev, o.notes, o.config_profile,
       new Date().toISOString()
     ];
   },
@@ -598,7 +599,33 @@ const FleetImport_ = {
     const rows = fullData.slice(bestRowIdx + 1);
     log.info(`→ ${rows.length} data rows`);
 
-    return { headers: finalHeaders, rows, headerIdx: bestRowIdx };
+    // --- EXTRACT CONFIGURATION SNAPSHOT ---
+    const extractedConfigs = {};
+    const satSheets = sat.getSheets();
+    for (const s of satSheets) {
+      const sName = s.getName();
+      if (sName.startsWith('Config_') && !sName.includes('Proposals')) {
+        try {
+          const cfgData = s.getDataRange().getValues();
+          const cfgProps = {};
+          for (let i = 0; i < cfgData.length; i++) {
+            const key = String(cfgData[i][0] || '').trim();
+            const val = cfgData[i][1];
+            if (key && !key.startsWith('//') && val !== undefined && val !== '') {
+              cfgProps[key] = val;
+            }
+          }
+          if (Object.keys(cfgProps).length > 0) {
+            extractedConfigs[sName] = cfgProps;
+          }
+        } catch (e) {
+          // ignore unreadable config sheets
+        }
+      }
+    }
+    const configSnapshot = Object.keys(extractedConfigs).length > 0 ? JSON.stringify(extractedConfigs) : '{}';
+
+    return { headers: finalHeaders, rows, headerIdx: bestRowIdx, configSnapshot };
   },
 
   // ─── Run report ───────────────────────────────────────────────────────────
