@@ -1177,6 +1177,9 @@ const Parser_ = {
     FLEET_ALIASES['config_profile'] = ['config_profile', 'configprofile', 'config profile', 'configuration', 'config_snapshot'];
     FLEET_ALIASES['imported_at']    = ['imported_at', 'importedat', 'import date', 'imported date'];
     
+    // Prevent 'satellite_id' from being matched to 'side'
+    delete FLEET_ALIASES['side'];
+    
     const allBets = [];
     const sheetSummaries = [];
     const skippedSheets = [];
