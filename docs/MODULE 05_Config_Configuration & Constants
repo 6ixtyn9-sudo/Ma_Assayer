@@ -308,9 +308,10 @@ const Config_ = {
     { name: "≥70%",   min: 0.701, max: 1.0,   label: "Elite (≥70%)" }
   ],
 
-  // Tier mappings
+  // Tier mappings — NOTE: "ELITE" is handled as its own first-class tier in parseTier()
+  // before these loops run. Do NOT add "elite" back to strong.
   tierMappings: {
-    strong: ["strong", "★", "★★★", "high", "s", "3", "elite", "top", "a", "best"],
+    strong: ["strong", "★", "★★★", "high", "s", "3", "top", "a", "best"],
     medium: ["medium", "●", "★★", "med", "m", "2", "standard", "avg", "b", "mid"],
     weak:   ["weak", "○", "★", "low", "w", "1", "minimal", "c", "bottom", "low"]
   },

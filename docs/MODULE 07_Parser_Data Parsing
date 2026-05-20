@@ -82,6 +82,12 @@ const Parser_ = {
 
     const t = String(val).toUpperCase().trim();
 
+    // ── ELITE must be checked first — before generic "strong" mappings absorb it ──
+    // Satellites write "ELITE" for confidence >= 70%. It must surface as its own tier.
+    if (t === "ELITE" || t === "ELITE TIER" || t === "T_ELITE" || t === "TIER_ELITE") {
+      return "ELITE";
+    }
+
     for (const pattern of Config_.tierMappings.strong) {
       if (t === pattern.toUpperCase() || t.includes(pattern.toUpperCase())) {
         return "STRONG";
