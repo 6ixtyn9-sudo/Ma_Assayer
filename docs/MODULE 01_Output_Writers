@@ -133,6 +133,34 @@ const Output_ = {
       return t !== "UNKNOWN" && t !== "";
     });
 
+    // normaliseConfBucket — accepts tier names, pct-range strings, and raw numeric scores.
+    // confBuckets from getConfBucket() return labels like "<55%", "55-60%", "65-70%", "≥70%".
+    // Some bets may have a raw decimal (0.72) or integer (72) confidence score.
+    function normaliseConfBucket(raw) {
+      if (raw === null || raw === undefined || raw === '') return '';
+      const s = String(raw).trim();
+      const up = s.toUpperCase();
+      if (['ELITE','STRONG','MEDIUM','EVEN','WEAK'].includes(up)) return up;
+      if (/^[≥≤<>]?\d+[-–]?\d*%?$/.test(s)) return s; // e.g. "55-60%", "<55%", "≥70%"
+      const numVal = parseFloat(s);
+      if (!isNaN(numVal) && numVal >= 0 && numVal <= 1.0) {
+        const pct = numVal * 100;
+        if (pct >= 70) return 'ELITE';
+        if (pct >= 65) return '65-70%';
+        if (pct >= 60) return '60-65%';
+        if (pct >= 55) return '55-60%';
+        return '<55%';
+      }
+      if (!isNaN(numVal) && numVal > 1) {
+        if (numVal >= 70) return 'ELITE';
+        if (numVal >= 65) return '65-70%';
+        if (numVal >= 60) return '60-65%';
+        if (numVal >= 55) return '55-60%';
+        return '<55%';
+      }
+      return s;
+    }
+
     const rows = betsToWrite.map((bet, i) => {
       // NOTE: flagBet signature = (bet, edges, leagueAssay, teamAssay, matchupAssay)
       const flagResult = (typeof Flagger_ !== "undefined" && Flagger_.flagBet)
@@ -156,10 +184,10 @@ const Output_ = {
         (home && away ? `${home} vs ${away}` : bet.pick || "");
 
       // Source: satellite_name is always populated from fleet import
-      const source = bet.satellite_name || bet.satelliteName || bet.source || "";
+      const source = bet.satellite_name || bet.satelliteName || bet.source || '';
 
-      // Conf Bucket: prefer confBucket, fall back to tier (parseTier result)
-      const confBucket = bet.confBucket || bet.tier || "";
+      // Conf Bucket: prefer confBucket, fall back to tier — normalise whatever value we get
+      const confBucket = normaliseConfBucket(bet.confBucket || bet.tier || '');
 
       // Line: the spread/handicap value — bet.line, NOT bet.odds (that's the price)
       const line = (bet.line !== undefined && bet.line !== null && bet.line !== "")
@@ -511,30 +539,36 @@ writeLeagueAssay(ss, leagueAssay, globalStats) {
       const gender = l.gender || (l.isWomen ? "W" : "M");
 
       return [
-        l.league || "",
+        l.league || '',
         qLabel,
-        l.source || "",
+        l.source || '',
         gender,
-        l.tier || "UNKNOWN",
-        l.typeKey || "",
+        l.tier || 'UNKNOWN',
+        l.typeKey || '',
         l.decisive || 0,
         l.wins || 0,
         l.losses || 0,
-        Stats_.pct(l.winRate || 0),
-        Stats_.pct(l.shrunkRate || 0),
-        Stats_.pct(l.lowerBound || 0),
-        Stats_.pct(l.upperBound || 0),
+        // Store raw decimals — 0.00% number format applied below so sheet displays "55.20%"
+        typeof l.winRate === 'number'    ? l.winRate    : 0,
+        typeof l.shrunkRate === 'number' ? l.shrunkRate : 0,
+        typeof l.lowerBound === 'number' ? l.lowerBound : 0,
+        typeof l.upperBound === 'number' ? l.upperBound : 0,
         Stats_.lift(l.lift || 0),
-        l.grade || "",
-        l.gradeSymbol || "",
-        l.isReliable ? "✅" : `${Math.round((l.reliability || 0) * 100)}%`,
-        l.isToxic ? "⛔" : "",
-        l.isElite ? "🌟" : ""
+        l.grade || '',
+        l.gradeSymbol || '',
+        l.isReliable ? '✅' : `${Math.round((l.reliability || 0) * 100)}%`,
+        l.isToxic ? '⛔' : '',
+        l.isElite ? '🌟' : ''
       ];
     });
 
   if (data.length > 0) {
     sheet.getRange(2, 1, data.length, headers.length).setValues(data);
+    // Apply 0.00% number format to WR columns (Raw WR=10, Shrunk WR=11, LB=12, UB=13 — 1-indexed)
+    ['Raw WR','Shrunk WR','Lower Bound','Upper Bound'].forEach(colName => {
+      const ci = headers.indexOf(colName) + 1;
+      if (ci > 0) sheet.getRange(2, ci, data.length, 1).setNumberFormat('0.00%');
+    });
   }
 
   this.autoResize(sheet);
@@ -867,12 +901,13 @@ writeTeamAssay(ss, teamAssay) {
       v.decisive || 0,
       v.wins || 0,
       v.losses || 0,
-      Stats_.pct(v.shrunkRate || 0),
+      // Store raw decimal — 0.00% format applied below
+      typeof v.shrunkRate === 'number' ? v.shrunkRate : 0,
       Stats_.lift(v.lift || 0),
-      `${v.gradeSymbol || ""} ${v.grade || ""}`.trim(),
-      v.isToxic ? "⛔" : "",
-      v.isElite ? "💎" : "",
-      Array.isArray(v.leagues) ? v.leagues.join(", ") : ""
+      `${v.gradeSymbol || ''} ${v.grade || ''}`.trim(),
+      v.isToxic ? '⛔' : '',
+      v.isElite ? '💎' : '',
+      Array.isArray(v.leagues) ? v.leagues.join(', ') : ''
     ];
   });
 
@@ -891,6 +926,9 @@ writeTeamAssay(ss, teamAssay) {
 
   if (rows.length > 0) {
     sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+    // Apply 0.00% number format to Shrunk WR column (col 6, 1-indexed)
+    const wrCol = headers.indexOf('Shrunk WR') + 1;
+    if (wrCol > 0) sheet.getRange(2, wrCol, rows.length, 1).setNumberFormat('0.00%');
   }
 
   this.autoResize(sheet);

@@ -272,7 +272,12 @@ function runSheetInspector() {
     if (unexpectedType > 3) flag(SHEET,0,'Type',       '',(unexpectedType-3)+' more rows have unrecognised type (first 3 flagged individually)');
     if (blankGrade     > 0) flag(SHEET,0,'Grade',      '',blankGrade+'/'+n+' rows have blank Grade');
     if (blankBacked    > 0) flag(SHEET,0,'Backed Team','',blankBacked+'/'+n+' rows have blank Backed Team (expected for OU bets)');
-    if (blankResult    > 0) flag(SHEET,0,'Result',     '',blankResult+'/'+n+' rows have blank/invalid Result (expected for pending bets)');
+    // Blank results are expected for pending/future bets — only flag if >80% are blank
+    if (blankResult > n * 0.80) {
+      flag(SHEET,0,'Result','',blankResult+'/'+n+' rows have blank Result — exceeds 80% threshold, possible writer bug');
+    } else if (blankResult > 0) {
+      Logger.log('[Inspector] MA_Vault: '+blankResult+'/'+n+' blank results — within expected range for pending bets');
+    }
     if (badConfBucket  > 0) flag(SHEET,0,'Conf Bucket','',badConfBucket+'/'+n+' rows have conf bucket that is neither a tier name nor a pct range');
 
     counts[SHEET].issues = report.filter(r=>r.sheet===SHEET).length;
@@ -295,16 +300,19 @@ function runSheetInspector() {
     const wrIdx       = Math.max(headers.indexOf('Win Rate'), 8);
     const gradeIdx    = Math.max(headers.indexOf('Grade'), 11);
 
-    let noTier=0,badGrade=0,zeroN=0,missingLeague=0,winRateOOB=0;
+    let noTier=0,zeroN=0,missingLeague=0,winRateOOB=0;
     rows.forEach(row => {
       const league  = String(row[0]||'').trim();
       const tier    = String(tierIdx>=0 ? row[tierIdx] : row[2]||'').trim().toUpperCase();
       const n       = Number(row[nIdx]||0);
-      const winRate = Number(row[wrIdx]||0);
-      const grade   = String(row[gradeIdx]||'').trim().toUpperCase();
+      // Win rate may be stored as a decimal (0.552) or as a formatted pct string ("55.20%")
+      // Read the raw cell value — Sheets returns the numeric value even for % formatted cells
+      const wrRaw   = row[wrIdx];
+      const winRate = typeof wrRaw === 'number' ? wrRaw : parseFloat(String(wrRaw||'').replace('%','')) / 100;
       if (!league) missingLeague++;
       if (tier && !VALID_TIERS.includes(tier)) noTier++;
       if (n === 0) zeroN++;
+      // After fix: winRate stored as decimal; allow [0,1]. If still > 1 it means pct not fixed yet.
       if (winRate < 0 || winRate > 1.001) winRateOOB++;
     });
 
@@ -337,7 +345,9 @@ function runSheetInspector() {
     rows.forEach(row => {
       const team    = String(row[0]||'').trim().toUpperCase();
       const n       = Number(row[2]||0);
-      const winRate = Number(row[4]||0);
+      // WR may be decimal or % formatted — parse safely
+      const wrRaw   = row[4];
+      const winRate = typeof wrRaw === 'number' ? wrRaw : parseFloat(String(wrRaw||'').replace('%','')) / 100;
       if (SYNTHETIC.some(s=>team.includes(s)) || team.startsWith('HIGHEST') || team.startsWith('HIGH Q')) synth++;
       if (n===0) zeroN++;
       if (winRate<0 || winRate>1.001) badWR++;
@@ -386,18 +396,20 @@ function runSheetInspector() {
     counts[SHEET] = { total: rows.length, issues: 0 };
     if (!rows.length) { flag(SHEET,0,'—','','Sheet is EMPTY — no edges discovered'); counts[SHEET].issues++; return; }
 
-    let blankEdge=0,zeroN=0,badWR=0;
+    let blankEdge=0,badWR=0;
     rows.forEach(row => {
       if (!String(row[0]||'').trim()) blankEdge++;
-      if (Number(row[7]||0)===0) zeroN++;
       const wr=Number(row[5]||0);
       if (wr<0||wr>1.001) badWR++;
     });
 
+    // Count completely empty rows (all cells blank/zero) as a real problem
+    const emptyRows = rows.filter(r => r.every(c => c === '' || c === 0));
+
     const n = rows.length;
-    if (blankEdge > 0) flag(SHEET,0,'Edge ID',  '',blankEdge+'/'+n+' edges missing ID');
-    if (zeroN     > 0) flag(SHEET,0,'N',        '',(zeroN)+'/'+n+' edges have N=0 (no decisive bets yet — expected for new patterns)');
-    if (badWR     > 0) flag(SHEET,0,'Win Rate', '',badWR+'/'+n+' edges have win rate outside [0,1]');
+    if (blankEdge    > 0) flag(SHEET,0,'Edge ID', '',blankEdge+'/'+n+' edges missing ID');
+    if (emptyRows.length > 0) flag(SHEET,0,'Row',   '',emptyRows.length+' completely empty edge rows found');
+    if (badWR        > 0) flag(SHEET,0,'Win Rate','',badWR+'/'+n+' edges have win rate outside [0,1]');
 
     counts[SHEET].issues = report.filter(r=>r.sheet===SHEET).length;
     Logger.log('[Inspector] ASSAYER_EDGES: '+n+' rows, '+counts[SHEET].issues+' issue(s)');
