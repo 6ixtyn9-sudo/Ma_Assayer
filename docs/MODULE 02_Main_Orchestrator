@@ -32,6 +32,9 @@ const Main_ = {
   
   // 1. Initialize
   Log_.init();
+  Logger.log('[ASSAY] ══════════════════════════════════════');
+  Logger.log('[ASSAY] runAssay() START — ' + new Date().toISOString());
+  Logger.log('[ASSAY] ══════════════════════════════════════');
   Config_.sheets.side = "Side"; // Ensure defaults
   Config_.sheets.totals = "Totals";
   

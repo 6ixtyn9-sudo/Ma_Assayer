@@ -1608,14 +1608,18 @@ function runFleetImportResume() {
   const log = Log_.module('FLEET_IMPORT');
   const done = FleetImport_.importAccuracyReports_(ss, { resume: true }, log);
   if (done !== false) {
+    // ── BUG FIX: read FI_CHAIN_ASSAY BEFORE cleanResumeTriggers_() deletes it ──
+    const shouldChainAssay = PropertiesService.getScriptProperties().getProperty('FI_CHAIN_ASSAY') === 'true';
+
     // Completed — cancel any leftover timer and clean properties
     FleetImport_.cleanResumeTriggers_();
-    
-    // Check if we need to chain into runAssay
-    const props = PropertiesService.getScriptProperties();
-    if (props.getProperty('FI_CHAIN_ASSAY') === 'true') {
-      props.deleteProperty('FI_CHAIN_ASSAY');
-      log.info('Fleet import finished on resume. Triggering Main_.runAssay()...');
+
+    // Chain into runAssay if this run was launched via runFleetImportAndAssay
+    if (shouldChainAssay) {
+      log.info('Fleet import finished on resume. Launching assay...');
+      log.info('══════════════════════════════════════');
+      log.info('HANDOFF → launching Main_.runAssay()');
+      log.info('══════════════════════════════════════');
       Log_.writeToSheet(ss);
       Main_.runAssay();
       return;
