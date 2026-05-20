@@ -198,31 +198,47 @@ const Output_ = {
       const line = String(bet.line || '').trim()
         || (String(cleanedPick).match(/([+-]\d+(?:\.\d+)?)\s*$/)?.[1] ?? '');
 
-      // Result / Outcome — normalise all Sheets-native formats to emoji strings.
-      // bet.outcome from _normalizeOutcome_ is already mapped at import time, but
-      // bucket sheet cells may store raw Sheets values: 1/0/-1, TRUE/FALSE, "WIN" etc.
+      // Result / Outcome — SCHEMA NOTE:
+      //   parseIntakeMarketSheets (fleet bets): bet.result = 1/0/-1/null (integer)
+      //   parseSideSheet:                       bet.result = 1/0/-1/null (integer)
+      //   parseIntakeMarketSheets never sets bet.outcome
+      //   MODULE 11 _buildRowObj_ sets bet.outcome — but those bets go through the
+      //   bucket sheet path and arrive here as intake bets anyway (bet.result)
+      // OUTCOME_MAP covers all known formats: integer, boolean string, word, emoji
       const OUTCOME_MAP = {
-        '1': '✅ HIT', 'true': '✅ HIT', 'hit': '✅ HIT', 'win': '✅ HIT', 'w': '✅ HIT',
-        '0': '🟡 PUSH', 'push': '🟡 PUSH', 'void': '🟡 PUSH', 'refund': '🟡 PUSH',
-        '-1': '❌ MISS', 'false': '❌ MISS', 'miss': '❌ MISS',
-        'loss': '❌ MISS', 'lose': '❌ MISS', 'l': '❌ MISS',
+        '1':   '✅ HIT',  'true':   '✅ HIT',  'hit':    '✅ HIT',  'win': '✅ HIT', 'w': '✅ HIT',
+        '0':   '🟡 PUSH', 'push':   '🟡 PUSH', 'void':   '🟡 PUSH', 'refund': '🟡 PUSH',
+        '-1':  '❌ MISS', 'false':  '❌ MISS', 'miss':   '❌ MISS',
+        'loss':'❌ MISS', 'lose':   '❌ MISS', 'l':      '❌ MISS',
       };
-      let finalResult = '';
+      // Prefer bet.result (always set), fall back to bet.outcome (MODULE 11 path), then bet.actual
+      const rawResult  = bet.result;
       const rawOutcome = bet.outcome;
-      if (rawOutcome !== null && rawOutcome !== undefined && rawOutcome !== '') {
-        const asStr = String(rawOutcome).trim();
-        if (asStr.startsWith('✅') || asStr.startsWith('❌') || asStr.startsWith('🟡')) {
-          finalResult = asStr;  // already emoji-formatted from _normalizeOutcome_
+      const rawActual  = bet.actual;
+      let finalResult = '';
+      // Coerce to string safely — handles null/undefined/boolean/number
+      const toStr = v => (v === null || v === undefined) ? '' : String(v).trim();
+      const resultStr  = toStr(rawResult);
+      const outcomeStr = toStr(rawOutcome);
+      const actualStr  = toStr(rawActual);
+      // Try result first (covers 1/0/-1/WIN/LOSS/etc.)
+      if (resultStr !== '') {
+        if (resultStr.startsWith('✅') || resultStr.startsWith('❌') || resultStr.startsWith('🟡')) {
+          finalResult = resultStr;
         } else {
-          finalResult = OUTCOME_MAP[asStr.toLowerCase()] || OUTCOME_MAP[asStr] || asStr;
+          finalResult = OUTCOME_MAP[resultStr.toLowerCase()] || OUTCOME_MAP[resultStr] || resultStr;
         }
       }
-      // Fallback: result field → actual score
-      if (!finalResult) {
-        const r = String(bet.result || '').trim();
-        const a = String(bet.actual || '').trim();
-        finalResult = r || a || '';
+      // Fallback: outcome string (MODULE 11 emoji path)
+      if (!finalResult && outcomeStr !== '') {
+        if (outcomeStr.startsWith('✅') || outcomeStr.startsWith('❌') || outcomeStr.startsWith('🟡')) {
+          finalResult = outcomeStr;
+        } else {
+          finalResult = OUTCOME_MAP[outcomeStr.toLowerCase()] || OUTCOME_MAP[outcomeStr] || outcomeStr;
+        }
       }
+      // Last resort: actual score string
+      if (!finalResult) finalResult = actualStr;
 
       // Conf Bucket — inline normalisation, no external function
       const rawBucket = String(bet.confBucket || bet.tier || '').trim().toUpperCase();
@@ -248,7 +264,7 @@ const Output_ = {
 
       return [
         i + 1,                                                     // Col 1:  Bet Index
-        bet.satellite_name || bet.source || '',                    // Col 2:  Source
+        bet.satellite_name || bet.source || '',                    // Col 2:  Source (satellite_name for MODULE 11 path; source='Fleet' for intake path)
         bet.league         || '',                                  // Col 3:  League
         bet.date           || '',                                  // Col 4:  Date
         matchup,                                                   // Col 5:  Matchup
