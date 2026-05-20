@@ -781,11 +781,27 @@ writeSummary(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, logSum
     ["Grade", `${Stats_.getGradeSymbol(globalStats?.winRate || 0)} ${Stats_.getGrade(globalStats?.winRate || 0, globalStats?.decisive || 0)}`],
     [""],
     ["═══════════════════════════════════════════════════════════"],
-    ["BY SOURCE"],
+    ["BY TYPE (Fleet)"],
     [""],
-    ["Source", "N", "Win Rate", "Grade"],
-    ["Side", sideStats?.decisive || 0, Stats_.pct(sideStats?.winRate || 0), Stats_.getGrade(sideStats?.winRate || 0, sideStats?.decisive || 0)],
-    ["Totals", totalsStats?.decisive || 0, Stats_.pct(totalsStats?.winRate || 0), Stats_.getGrade(totalsStats?.winRate || 0, totalsStats?.decisive || 0)],
+    ["Bet Type", "Combos", "Decisive", "Win Rate", "Grade"],
+    // Aggregate leagueAssay combos by typeKey for a fleet-level type breakdown
+    ...(() => {
+      const byType = {};
+      const combosAll = Object.values(leagueAssay || {});
+      combosAll.filter(l => l?.quarter == null).forEach(l => {
+        const t = (l.typeKey || l.type || "ALL").toUpperCase() || "ALL";
+        if (!byType[t]) byType[t] = { combos: 0, decisive: 0, wins: 0 };
+        byType[t].combos++;
+        byType[t].decisive += l.decisive || 0;
+        byType[t].wins     += l.wins     || 0;
+      });
+      return Object.entries(byType)
+        .sort((a,b) => b[1].decisive - a[1].decisive)
+        .map(([t, s]) => {
+          const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
+          return [t, s.combos, s.decisive, Stats_.pct(wr), Stats_.getGrade(wr, s.decisive)];
+        });
+    })(),
     [""],
     ["═══════════════════════════════════════════════════════════"],
     ["DISCOVERY SUMMARY"],

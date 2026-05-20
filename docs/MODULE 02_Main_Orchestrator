@@ -228,9 +228,13 @@ function runSheetInspector() {
     const VALID_RESULTS = ['WIN','LOSS','PUSH','W','L','P','','—','-'];
     const VALID_TYPES   = ['SNIPER_MARGIN','SNIPER_OU','1H_1X2','FT_O_U',
                            'SNIPER_HIGH_QTR','BANKER','ROBBER','FT_1X2','FIRST_HALF_1X2'];
+    // Conf Bucket can be either a tier name (ELITE/STRONG/MEDIUM/EVEN/WEAK)
+    // OR a confidence range string like "55-60%", "60-65%", "≥70%" — both are valid.
+    const PCT_RANGE_RE  = /^[≥≤]?\d+[-–]?\d*%?$/;
 
     let blankSource=0,blankMatchup=0,blankGrade=0,unknownType=0,
-        blankResult=0,blankBacked=0,badGrade=0,blankLeague=0,unexpectedType=0;
+        blankResult=0,blankBacked=0,blankLeague=0,unexpectedType=0,
+        badConfBucket=0;
 
     rows.forEach((row, ri) => {
       const rowNum  = ri + 2;
@@ -254,8 +258,9 @@ function runSheetInspector() {
       if (!grade)   blankGrade++;
       if (!backed)  blankBacked++;
       if (!VALID_RESULTS.includes(result)) blankResult++;
-      if (confBkt && !VALID_TIERS.includes(confBkt)) {
-        flag(SHEET,rowNum,'Conf Bucket',confBkt,'Unexpected tier value');
+      // Conf Bucket: accept tier names OR pct-range strings like "55-60%", "≥70%"
+      if (confBkt && !VALID_TIERS.includes(confBkt) && !PCT_RANGE_RE.test(confBkt)) {
+        badConfBucket++;
       }
     });
 
@@ -268,6 +273,7 @@ function runSheetInspector() {
     if (blankGrade     > 0) flag(SHEET,0,'Grade',      '',blankGrade+'/'+n+' rows have blank Grade');
     if (blankBacked    > 0) flag(SHEET,0,'Backed Team','',blankBacked+'/'+n+' rows have blank Backed Team (expected for OU bets)');
     if (blankResult    > 0) flag(SHEET,0,'Result',     '',blankResult+'/'+n+' rows have blank/invalid Result (expected for pending bets)');
+    if (badConfBucket  > 0) flag(SHEET,0,'Conf Bucket','',badConfBucket+'/'+n+' rows have conf bucket that is neither a tier name nor a pct range');
 
     counts[SHEET].issues = report.filter(r=>r.sheet===SHEET).length;
     Logger.log('[Inspector] MA_Vault: '+n+' rows, '+counts[SHEET].issues+' issue(s)');
@@ -309,7 +315,7 @@ function runSheetInspector() {
     if (winRateOOB    > 0) flag(SHEET,0,'Win Rate','',winRateOOB+'/'+n+' rows have win rate outside [0,1]');
 
     const hasElite = rows.some(r => String(tierIdx>=0 ? r[tierIdx] : r[2]||'').toUpperCase() === 'ELITE');
-    if (!hasElite) flag(SHEET,0,'Tier','','No ELITE tier rows found — verify parseTier fix is deployed and re-run assay');
+    if (!hasElite) flag(SHEET,0,'Tier','','[INFO] No ELITE tier rows — expected if no satellite bet has confidence ≥70%, or assay run before parseTier fix was deployed');
 
     counts[SHEET].issues = report.filter(r=>r.sheet===SHEET).length;
     Logger.log('[Inspector] MA_LeagueAssay: '+n+' rows, '+counts[SHEET].issues+' issue(s)');
@@ -390,7 +396,7 @@ function runSheetInspector() {
 
     const n = rows.length;
     if (blankEdge > 0) flag(SHEET,0,'Edge ID',  '',blankEdge+'/'+n+' edges missing ID');
-    if (zeroN     > 0) flag(SHEET,0,'N',        '',zeroN+'/'+n+' edges have N=0');
+    if (zeroN     > 0) flag(SHEET,0,'N',        '',(zeroN)+'/'+n+' edges have N=0 (no decisive bets yet — expected for new patterns)');
     if (badWR     > 0) flag(SHEET,0,'Win Rate', '',badWR+'/'+n+' edges have win rate outside [0,1]');
 
     counts[SHEET].issues = report.filter(r=>r.sheet===SHEET).length;
@@ -462,8 +468,10 @@ function runSheetInspector() {
     if (rows.length < 3) { flag(SHEET,0,'—','','Sheet appears empty or malformed (<3 data rows)'); counts[SHEET].issues++; return; }
 
     const text = rows.map(r=>r.join(' ')).join('\n').toUpperCase();
-    if (!text.includes('FLEET') && !text.includes('SNIPER') && !text.includes('BANKER')) {
-      flag(SHEET,0,'BY SOURCE','','Fleet bet type breakdown appears missing from summary');
+    // BY TYPE (Fleet) replaces old BY SOURCE — check for fleet bet type keywords
+    if (!text.includes('FLEET') && !text.includes('SNIPER') && !text.includes('BANKER') &&
+        !text.includes('BY TYPE') && !text.includes('ROBBER')) {
+      flag(SHEET,0,'BY TYPE','','Fleet bet type breakdown missing from MA_Summary — check writeSummary in MODULE 01');
     }
 
     counts[SHEET].issues = report.filter(r=>r.sheet===SHEET).length;
