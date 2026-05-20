@@ -127,8 +127,13 @@ const Output_ = {
 
     if (!allBets || allBets.length === 0) return;
 
-    const rows = allBets.map((bet, i) => {
-      // Evaluate each bet through the Flagger to get bestGrade and status
+    // Issue 1 safety-net: exclude any UNKNOWN-typed bets that slipped through
+    const betsToWrite = allBets.filter(bet => {
+      const t = String(bet.type || bet.betType || "").toUpperCase().trim();
+      return t !== "UNKNOWN" && t !== "";
+    });
+
+    const rows = betsToWrite.map((bet, i) => {
       // NOTE: flagBet signature = (bet, edges, leagueAssay, teamAssay, matchupAssay)
       const flagResult = (typeof Flagger_ !== "undefined" && Flagger_.flagBet)
         ? Flagger_.flagBet(bet, edges, leagueAssay, teamAssay, matchupAssay)
@@ -137,22 +142,48 @@ const Output_ = {
       const bestGrade = flagResult.bestGrade || "N/A";
       const status    = flagResult.status    || "UNGRADED";
 
+      // Derive backed team + opponent from direction + home/away
+      const direction  = String(bet.direction || "").toUpperCase().trim();
+      const home       = bet.home || "";
+      const away       = bet.away || "";
+      let backedTeam   = bet.pick || ""; // fallback: raw pick text
+      let opponent     = "";
+      if (direction === "HOME" && home) { backedTeam = home; opponent = away; }
+      else if (direction === "AWAY" && away) { backedTeam = away; opponent = home; }
+
+      // Matchup: prefer bet.match (always set by parser), then construct, then pick
+      const matchup = bet.match || bet.matchup ||
+        (home && away ? `${home} vs ${away}` : bet.pick || "");
+
+      // Source: satellite_name is always populated from fleet import
+      const source = bet.satellite_name || bet.satelliteName || bet.source || "";
+
+      // Conf Bucket: prefer confBucket, fall back to tier (parseTier result)
+      const confBucket = bet.confBucket || bet.tier || "";
+
+      // Line: the spread/handicap value — bet.line, NOT bet.odds (that's the price)
+      const line = (bet.line !== undefined && bet.line !== null && bet.line !== "")
+        ? bet.line : "";
+
+      // Result: prefer outcome (WIN/LOSS/PUSH), then actual (score value)
+      const result = bet.outcome || bet.actual || bet.result || "";
+
       return [
-        i + 1,                                        // Bet Index (rowIndex)
-        bet.source        || "",                       // Source
-        bet.league        || "",                       // League
-        bet.date          || "",                       // Date
-        bet.matchup       || `${bet.home} vs ${bet.away}` || "",  // Matchup
-        bet.pick          || "",                       // Pick
-        bet.type          || bet.betType || "",        // Type
-        bet.confidence    || "",                       // Confidence
-        bet.confBucket    || "",                       // Conf Bucket
-        bestGrade,                                     // Grade
-        status,                                        // Purity Status
-        bet.backedTeam    || "",                       // Backed Team
-        bet.opponent      || "",                       // Opponent
-        bet.line          || bet.spread || "",         // Spread / Line
-        bet.result        || bet.outcome || ""         // Result / Outcome
+        i + 1,               // Col 1:  Bet Index
+        source,              // Col 2:  Source (satellite name)
+        bet.league || "",    // Col 3:  League
+        bet.date   || "",    // Col 4:  Date
+        matchup,             // Col 5:  Matchup
+        bet.pick   || "",    // Col 6:  Pick
+        bet.type   || bet.betType || "", // Col 7: Type
+        bet.confidence || "",// Col 8:  Confidence
+        confBucket,          // Col 9:  Conf Bucket (tier)
+        bestGrade,           // Col 10: Grade
+        status,              // Col 11: Purity Status
+        backedTeam,          // Col 12: Backed Team
+        opponent,            // Col 13: Opponent
+        line,                // Col 14: Spread / Line
+        result               // Col 15: Result / Outcome
       ];
     });
 
@@ -165,10 +196,10 @@ const Output_ = {
       sheet.autoResizeColumn(c);
     }
 
-    Logger.log(`[writeVaultFlat] Wrote ${rows.length} flat records to "${SHEET_NAME}".`);
+    Logger.log(`[writeVaultFlat] Wrote ${rows.length} fleet records to "${SHEET_NAME}" (filtered ${allBets.length - betsToWrite.length} UNKNOWN).`);
   },
 
-  writeVaultDashboard(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay) {
+  writeVaultDashboard(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay, totalBetCount) {
     const SHEET_NAME = Config_.sheets.vaultDashboard || "MA_Vault_Dashboard";
 
     let sheet = ss.getSheetByName(SHEET_NAME);
@@ -179,13 +210,12 @@ const Output_ = {
       sheet.clearFormats();
     }
 
-    // ── Delegate all original writeVault visual rendering to this sheet ──
-    this._renderVaultDashboardBody_(sheet, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay);
+    this._renderVaultDashboardBody_(sheet, globalStats, leagueAssay, edges, teamAssay, matchupAssay, totalBetCount);
 
     Logger.log(`[writeVaultDashboard] Dashboard rendered to "${SHEET_NAME}".`);
   },
 
-  _renderVaultDashboardBody_(sheet, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay) {
+  _renderVaultDashboardBody_(sheet, globalStats, leagueAssay, edges, teamAssay, matchupAssay, totalBetCount) {
     if (teamAssay === undefined) teamAssay = {};
     if (matchupAssay === undefined) matchupAssay = {};
     if (!this.log) this.init();
@@ -195,10 +225,6 @@ const Output_ = {
 
     const safeGlobalWR =
       (globalStats && typeof globalStats.winRate === "number" && isFinite(globalStats.winRate)) ? globalStats.winRate : 0;
-    const safeSideWR =
-      (sideStats && typeof sideStats.winRate === "number" && isFinite(sideStats.winRate)) ? sideStats.winRate : 0;
-    const safeTotalsWR =
-      (totalsStats && typeof totalsStats.winRate === "number" && isFinite(totalsStats.winRate)) ? totalsStats.winRate : 0;
     const safePct = (v) => (typeof v === "number" && isFinite(v)) ? Stats_.pct(v) : "N/A";
 
     const globalGrade = Stats_.getGradeInfo(safeGlobalWR, globalStats ? globalStats.decisive || 0 : 0);
@@ -210,23 +236,25 @@ const Output_ = {
     data.push([`⚗️ MA ASSAYER VAULT — v${Config_.version}`, "", "", "", "", "", "", "", "", now]);
     data.push([""]);
     data.push(["═══════════════════════════════════════════════════════════════════"]);
-    data.push(["📊 PURITY ASSESSMENT"]);
+    data.push(["📊 PURITY ASSESSMENT (Fleet-Only)"]);
     data.push([""]);
 
-    // Stats
-    data.push(["Metric", "Side/Classic", "Totals/Classic", "Fleet (All)", "Grade", "Status"]);
-    data.push(["Decisive (Graded)", sideStats ? sideStats.decisive || 0 : 0, totalsStats ? totalsStats.decisive || 0 : 0, globalStats ? globalStats.decisive || 0 : 0, "", ""]);
-    data.push(["Wins", sideStats ? sideStats.wins || 0 : 0, totalsStats ? totalsStats.wins || 0 : 0, globalStats ? globalStats.wins || 0 : 0, "", ""]);
-    data.push(["Losses", sideStats ? sideStats.losses || 0 : 0, totalsStats ? totalsStats.losses || 0 : 0, globalStats ? globalStats.losses || 0 : 0, "", ""]);
-    // NOTE: Side/Classic and Totals/Classic columns are 0 in fleet-only mode (no Side/Totals sheets).
-    data.push([
-      "Win Rate",
-      safePct(safeSideWR),
-      safePct(safeTotalsWR),
-      safePct(safeGlobalWR),
-      `${globalGrade.symbol} ${globalGrade.name}`,
-      (globalStats ? globalStats.decisive || 0 : 0) >= Config_.thresholds.minNReliable ? "✅ Reliable" : "📊 Building"
-    ]);
+    // Fleet-only 2-column stats table
+    const decisive  = globalStats ? globalStats.decisive  || 0 : 0;
+    const wins      = globalStats ? globalStats.wins      || 0 : 0;
+    const losses    = globalStats ? globalStats.losses    || 0 : 0;
+    const totalParsed = (typeof totalBetCount === "number" && totalBetCount > 0)
+      ? totalBetCount : (decisive + (globalStats ? globalStats.pushes || 0 : 0));
+    const pending   = Math.max(0, totalParsed - decisive);
+    const isReliable = decisive >= (Config_.thresholds.minNReliable || 100);
+
+    data.push(["Metric", "Fleet (All)", "Grade", "Status"]);
+    data.push(["Total Parsed",       totalParsed, "", ""]);
+    data.push(["Decisive (Graded)",  decisive, `${globalGrade.symbol} ${globalGrade.name}`, isReliable ? "✅ Reliable" : "📊 Building"]);
+    data.push(["Pending (No Result)",pending, "", ""]);
+    data.push(["Wins",               wins,    "", ""]);
+    data.push(["Losses",             losses,  "", ""]);
+    data.push(["Win Rate",           safePct(safeGlobalWR), "", ""]);
 
     data.push([""]);
     data.push(["═══════════════════════════════════════════════════════════════════"]);

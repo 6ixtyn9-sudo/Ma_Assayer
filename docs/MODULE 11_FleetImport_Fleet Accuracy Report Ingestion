@@ -274,6 +274,7 @@ const FleetImport_ = {
             }
 
             const rowObj = this._buildRowObj_(raw, resolved, sat, configSnapshot);
+            if (!rowObj) { satSkipped++; continue; }  // UNKNOWN type — skip entirely
             const tabName = this._typeToTab_(rowObj.type);
 
             const keyParts = [
@@ -464,7 +465,12 @@ const FleetImport_ = {
 
     const rawType     = get('type');
     const canonType   = this._typeToTab_(rawType);
-    if (canonType === 'UNKNOWN') this._trackUnknownType_(rawType);
+    if (canonType === 'UNKNOWN') {
+      // Track the raw type string for future TYPE_CANONICAL expansion (diagnostic only)
+      this._trackUnknownType_(rawType);
+      // Skip — UNKNOWN bets are unclassifiable and must not flow into the assayer
+      return null;
+    }
 
     return {
       satellite_id:   sat.id,

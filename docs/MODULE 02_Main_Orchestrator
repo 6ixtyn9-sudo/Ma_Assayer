@@ -78,7 +78,7 @@ const Main_ = {
     
     // 7. Write Outputs
     Output_.writeVaultFlat(ss, allBets, leagueAssay, teamAssay, matchupAssay, edges);
-    Output_.writeVaultDashboard(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay);
+    Output_.writeVaultDashboard(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay, allBets.length);
     Output_.writeLeagueAssay(ss, leagueAssay, globalStats);
     Output_.writeDiscoveredEdges(ss, edges, globalStats);
     Output_.writeExclusionImpact(ss, exclusionImpact, globalStats);
