@@ -206,10 +206,11 @@ const Output_ = {
       //   bucket sheet path and arrive here as intake bets anyway (bet.result)
       // OUTCOME_MAP covers all known formats: integer, boolean string, word, emoji
       const OUTCOME_MAP = {
-        '1':   '✅ HIT',  'true':   '✅ HIT',  'hit':    '✅ HIT',  'win': '✅ HIT', 'w': '✅ HIT',
-        '0':   '🟡 PUSH', 'push':   '🟡 PUSH', 'void':   '🟡 PUSH', 'refund': '🟡 PUSH',
-        '-1':  '❌ MISS', 'false':  '❌ MISS', 'miss':   '❌ MISS',
-        'loss':'❌ MISS', 'lose':   '❌ MISS', 'l':      '❌ MISS',
+        // Integer convention confirmed from parseOutcome() (MODULE 07 lines 39/46/53):
+        //   1 = WIN (return 1), 0 = LOSS (return 0), -1 = PUSH (return -1)
+        '1':    '✅ HIT',   'true':   '✅ HIT',  'hit':  '✅ HIT',  'win':    '✅ HIT',  'w': '✅ HIT',
+        '0':    '❌ MISS',  'false':  '❌ MISS', 'loss': '❌ MISS', 'miss':   '❌ MISS', 'l': '❌ MISS', 'lose': '❌ MISS',
+        '-1':   '🟡 PUSH', 'push':   '🟡 PUSH', 'void': '🟡 PUSH', 'refund': '🟡 PUSH',
       };
       // Prefer bet.result (always set), fall back to bet.outcome (MODULE 11 path), then bet.actual
       const rawResult  = bet.result;
