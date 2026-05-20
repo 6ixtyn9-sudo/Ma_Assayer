@@ -162,49 +162,60 @@ const Output_ = {
     }
 
     const rows = betsToWrite.map((bet, i) => {
+      // Source: satellite_name is always populated from fleet import.
+      // Must be resolved BEFORE flagBet so evaluateRow builds correct leagueAssay keys.
+      // Fleet bets have no bet.source by default — without it, evaluateRow falls back to
+      // betSource='Totals' (because bet.direction exists), building wrong keys like
+      // "NBB_Totals_M_STRONG" instead of "NBB_Fleet_M_STRONG" → leagueInfo = null → CHARCOAL.
+      const source = bet.satellite_name || bet.satelliteName || bet.source || '';
+      if (!bet.source && source) bet.source = source;  // ← inject for evaluateRow
+
       // NOTE: flagBet signature = (bet, edges, leagueAssay, teamAssay, matchupAssay)
-      const flagResult = (typeof Flagger_ !== "undefined" && Flagger_.flagBet)
+      const flagResult = (typeof Flagger_ !== 'undefined' && Flagger_.flagBet)
         ? Flagger_.flagBet(bet, edges, leagueAssay, teamAssay, matchupAssay)
-        : { bestGrade: "N/A", status: "UNGRADED" };
+        : { bestGrade: 'N/A', status: 'UNGRADED' };
 
-      const bestGrade = flagResult.bestGrade || "N/A";
-      const status    = flagResult.status    || "UNGRADED";
+      const bestGrade = flagResult.bestGrade || 'N/A';
+      const status    = flagResult.status    || 'UNGRADED';
 
-      // Derive backed team + opponent from direction + home/away
-      const direction  = String(bet.direction || "").toUpperCase().trim();
-      const home       = bet.home || "";
-      const away       = bet.away || "";
-      let backedTeam   = bet.pick || ""; // fallback: raw pick text
-      let opponent     = "";
-      if (direction === "HOME" && home) { backedTeam = home; opponent = away; }
-      else if (direction === "AWAY" && away) { backedTeam = away; opponent = home; }
+      // Derive backed team + opponent from direction + home/away.
+      // Do NOT use bet.pick as a fallback — it contains pick strings like "Q1: H +4.5"
+      // which look like team names but are not. Leave blank when home/away unavailable.
+      const direction = String(bet.direction || '').toUpperCase().trim();
+      const home      = bet.home || '';
+      const away      = bet.away || '';
+      let backedTeam  = '';
+      let opponent    = '';
+      if (direction === 'HOME' && home) { backedTeam = home; opponent = away; }
+      else if (direction === 'AWAY' && away) { backedTeam = away; opponent = home; }
+      // Only use bet.pick as a team name if it doesn't look like a pick string
+      else if (bet.pick && !bet.pick.includes(':') && !/[+\-]\d/.test(bet.pick)) {
+        backedTeam = bet.pick;
+      }
 
       // Matchup: prefer bet.match (always set by parser), then construct, then pick
       const matchup = bet.match || bet.matchup ||
-        (home && away ? `${home} vs ${away}` : bet.pick || "");
-
-      // Source: satellite_name is always populated from fleet import
-      const source = bet.satellite_name || bet.satelliteName || bet.source || '';
+        (home && away ? `${home} vs ${away}` : bet.pick || '');
 
       // Conf Bucket: prefer confBucket, fall back to tier — normalise whatever value we get
       const confBucket = normaliseConfBucket(bet.confBucket || bet.tier || '');
 
       // Line: the spread/handicap value — bet.line, NOT bet.odds (that's the price)
-      const line = (bet.line !== undefined && bet.line !== null && bet.line !== "")
-        ? bet.line : "";
+      const line = (bet.line !== undefined && bet.line !== null && bet.line !== '')
+        ? bet.line : '';
 
       // Result: prefer outcome (WIN/LOSS/PUSH), then actual (score value)
-      const result = bet.outcome || bet.actual || bet.result || "";
+      const result = bet.outcome || bet.actual || bet.result || '';
 
       return [
         i + 1,               // Col 1:  Bet Index
         source,              // Col 2:  Source (satellite name)
-        bet.league || "",    // Col 3:  League
-        bet.date   || "",    // Col 4:  Date
+        bet.league || '',    // Col 3:  League
+        bet.date   || '',    // Col 4:  Date
         matchup,             // Col 5:  Matchup
-        bet.pick   || "",    // Col 6:  Pick
-        bet.type   || bet.betType || "", // Col 7: Type
-        bet.confidence || "",// Col 8:  Confidence
+        bet.pick   || '',    // Col 6:  Pick
+        bet.type   || bet.betType || '', // Col 7: Type
+        bet.confidence || '', // Col 8: Confidence
         confBucket,          // Col 9:  Conf Bucket (tier)
         bestGrade,           // Col 10: Grade
         status,              // Col 11: Purity Status
