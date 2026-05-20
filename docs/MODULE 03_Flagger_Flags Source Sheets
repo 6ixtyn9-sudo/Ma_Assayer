@@ -339,10 +339,27 @@ const Flagger_ = {
         const tQLab = teamInfo.quarterLabel || "All";
         status = `💎 ${tSym} ${backedTeam} (${tQLab})`;
 
-      } else if (leagueInfo && (leagueInfo.grade === "GOLD" || leagueInfo.grade === "PLATINUM")) {
-        const symbol = leagueInfo.gradeSymbol || leagueInfo.grade;
-        const qLabel = leagueInfo.quarter == null ? "All" : (leagueInfo.quarter === 0 ? "Full" : `Q${leagueInfo.quarter}`);
-        status = `🏆 ${symbol} ${leagueInfo.source || betSource} ${leagueInfo.gender || gender} ${leagueInfo.tier || tier} ${qLabel}`;
+      } else if (leagueInfo) {
+        const symbol   = leagueInfo.gradeSymbol || leagueInfo.grade;
+        const qLabel   = leagueInfo.quarter == null ? 'All' : (leagueInfo.quarter === 0 ? 'Full' : `Q${leagueInfo.quarter}`);
+        const lgGrade  = leagueInfo.grade || 'CHARCOAL';
+
+        // Upgrade bestGrade if leagueInfo grade is better than current default
+        if (this.GRADE_ORDER.indexOf(lgGrade) > this.GRADE_ORDER.indexOf(bestGrade)) {
+          bestGrade = lgGrade;
+        }
+
+        // Build status string based on grade tier
+        if (lgGrade === 'GOLD' || lgGrade === 'PLATINUM') {
+          status = `🏆 ${symbol} ${leagueInfo.source || betSource} ${leagueInfo.gender || gender} ${leagueInfo.tier || tier} ${qLabel}`;
+        } else if (lgGrade === 'SILVER') {
+          status = `🥈 ${symbol} ${leagueInfo.source || betSource} ${leagueInfo.gender || gender} ${leagueInfo.tier || tier} ${qLabel}`;
+        } else if (lgGrade === 'BRONZE') {
+          status = `🥉 ${symbol} ${leagueInfo.source || betSource} ${leagueInfo.gender || gender} ${leagueInfo.tier || tier} ${qLabel}`;
+        } else if (lgGrade === 'ROCK') {
+          status = `🪨 ${symbol} ${leagueInfo.source || betSource} ${leagueInfo.gender || gender} ${leagueInfo.tier || tier} ${qLabel}`;
+        }
+        // CHARCOAL leagueInfo: status stays "—" (will be set by toxic path or edges)
       }
     }
 
