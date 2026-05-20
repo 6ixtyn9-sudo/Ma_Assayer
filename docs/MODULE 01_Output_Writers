@@ -147,7 +147,9 @@ const Output_ = {
       } catch (e) { /* silent — grade stays CHARCOAL */ }
 
       const bestGrade = flagResult.bestGrade || flagResult.grade || '🜃 CHARCOAL';
-      const status    = flagResult.status    || '—';
+      // Guarantee status is never blank — empty string from flagBet becomes '—'
+      const status = (flagResult.status && String(flagResult.status).trim())
+                     ? String(flagResult.status).trim() : '—';
 
       // Clean pick string — strip embedded confidence annotation markers that some
       // satellites embed inline: "Q2: A +9.0 ★ (75%) ★" → "Q2: A +9.0"
@@ -156,15 +158,37 @@ const Output_ = {
         .replace(/\s*\(\d+(?:\.\d+)?%\)\s*/g, '')
         .trim();
 
-      // Derive backed team + opponent from direction + home/away ONLY.
-      // Never use pick string as a team name — it contains spread tokens.
+      // Derive backed team + opponent by bet type:
+      //   Path 1: directional spread (SNIPER_MARGIN) — direction + home/away
+      //   Path 2: BANKER / ROBBER — pick IS the team name directly
+      //   Path 3: 1H_1X2 / FT_1X2 — pick may be HOME/AWAY/DRAW or a team name
+      //   Path 4: OU / totals (SNIPER_OU, FT_O_U, SNIPER_HIGH_QTR) — no backed team
       const direction = String(bet.direction || '').toUpperCase().trim();
       const home      = String(bet.home      || '').trim();
       const away      = String(bet.away      || '').trim();
+      const betType   = String(bet.type      || '').toUpperCase().trim();
       let backedTeam  = '';
       let opponent    = '';
-      if      (direction === 'HOME' && home) { backedTeam = home; opponent = away; }
-      else if (direction === 'AWAY' && away) { backedTeam = away; opponent = home; }
+
+      if (direction === 'HOME' && home) {
+        // Path 1a: HOME direction
+        backedTeam = home; opponent = away;
+      } else if (direction === 'AWAY' && away) {
+        // Path 1b: AWAY direction
+        backedTeam = away; opponent = home;
+      } else if (betType === 'BANKER' || betType === 'ROBBER') {
+        // Path 2: pick is the team name — not a spread string
+        const isSpreadPick = /^Q\d:|[+-]\d/.test(cleanedPick);
+        if (!isSpreadPick && cleanedPick) backedTeam = cleanedPick;
+      } else if (betType === '1H_1X2' || betType === 'FT_1X2' || betType === 'FIRST_HALF_1X2') {
+        // Path 3: pick may be HOME/AWAY/DRAW label or a team name
+        const pickUp = cleanedPick.toUpperCase();
+        if      (pickUp === 'HOME' && home)  { backedTeam = home; opponent = away; }
+        else if (pickUp === 'AWAY' && away)  { backedTeam = away; opponent = home; }
+        else if (pickUp === 'DRAW')          { backedTeam = 'Draw'; }
+        else if (cleanedPick && !/[+-]\d/.test(cleanedPick)) { backedTeam = cleanedPick; }
+      }
+      // Path 4: OU/totals — backedTeam stays blank (correct)
 
       // Matchup: match field from schema, then construct from home/away
       const matchup = bet.match || (home && away ? `${home} vs ${away}` : '');
@@ -174,10 +198,31 @@ const Output_ = {
       const line = String(bet.line || '').trim()
         || (String(cleanedPick).match(/([+-]\d+(?:\.\d+)?)\s*$/)?.[1] ?? '');
 
-      // Result / Outcome — full coercion chain, handles boolean/null/undefined
-      const coerce = v => (v === null || v === undefined || v === false || v === true)
-                          ? '' : String(v).trim();
-      const finalResult = coerce(bet.outcome) || coerce(bet.result) || coerce(bet.actual) || '';
+      // Result / Outcome — normalise all Sheets-native formats to emoji strings.
+      // bet.outcome from _normalizeOutcome_ is already mapped at import time, but
+      // bucket sheet cells may store raw Sheets values: 1/0/-1, TRUE/FALSE, "WIN" etc.
+      const OUTCOME_MAP = {
+        '1': '✅ HIT', 'true': '✅ HIT', 'hit': '✅ HIT', 'win': '✅ HIT', 'w': '✅ HIT',
+        '0': '🟡 PUSH', 'push': '🟡 PUSH', 'void': '🟡 PUSH', 'refund': '🟡 PUSH',
+        '-1': '❌ MISS', 'false': '❌ MISS', 'miss': '❌ MISS',
+        'loss': '❌ MISS', 'lose': '❌ MISS', 'l': '❌ MISS',
+      };
+      let finalResult = '';
+      const rawOutcome = bet.outcome;
+      if (rawOutcome !== null && rawOutcome !== undefined && rawOutcome !== '') {
+        const asStr = String(rawOutcome).trim();
+        if (asStr.startsWith('✅') || asStr.startsWith('❌') || asStr.startsWith('🟡')) {
+          finalResult = asStr;  // already emoji-formatted from _normalizeOutcome_
+        } else {
+          finalResult = OUTCOME_MAP[asStr.toLowerCase()] || OUTCOME_MAP[asStr] || asStr;
+        }
+      }
+      // Fallback: result field → actual score
+      if (!finalResult) {
+        const r = String(bet.result || '').trim();
+        const a = String(bet.actual || '').trim();
+        finalResult = r || a || '';
+      }
 
       // Conf Bucket — inline normalisation, no external function
       const rawBucket = String(bet.confBucket || bet.tier || '').trim().toUpperCase();
