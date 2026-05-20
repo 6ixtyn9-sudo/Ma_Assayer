@@ -713,8 +713,13 @@ const Stats_ = {
 
       const isConfigToxic = toxicTeams.includes(team);
       const isConfigElite = eliteTeams.includes(team);
-      const isPerfToxic   = gradeInfo.grade === "CHARCOAL";
-      const isPerfElite   = (gradeInfo.grade === "GOLD" || gradeInfo.grade === "PLATINUM");
+
+      const minNTeamReliable = Config_.thresholds.minNTeamReliable ?? 40;
+      const reliability      = Math.min(1, basic.decisive / minNTeamReliable);
+      const isReliable       = basic.decisive >= minNTeamReliable;
+
+      const isPerfToxic   = isReliable && gradeInfo.grade === "CHARCOAL";
+      const isPerfElite   = isReliable && (gradeInfo.grade === "GOLD" || gradeInfo.grade === "PLATINUM");
 
       return {
         team,
@@ -722,6 +727,8 @@ const Stats_ = {
         quarter,
         quarterLabel,
         ...basic,
+        reliability,
+        isReliable,
         shrunkRate: shrunk,
         lowerBound,
         upperBound,

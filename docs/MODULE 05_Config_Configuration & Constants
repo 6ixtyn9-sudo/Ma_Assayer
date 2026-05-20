@@ -31,7 +31,8 @@ const Config_ = {
   sheets: {
     side: "Side",
     totals: "Totals",
-    vault: "MA_Vault",
+    vault:               "MA_Vault",
+    vaultDashboard:      "MA_Vault_Dashboard",
     discovery: "MA_Discovery",
     leagueAssay: "MA_LeagueAssay",
     exclusion: "MA_Exclusion",
@@ -271,7 +272,7 @@ const Config_ = {
   },
 
   toxicLeagues: ["UNKNOWN"],
-  eliteLeagues: ["UNKNOWN"],
+  eliteLeagues: [],
   toxicTeams: [],
   eliteTeams: [],
   toxicMatchups: [],

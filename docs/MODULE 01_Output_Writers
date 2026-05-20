@@ -90,128 +90,184 @@ const Output_ = {
 /**
  * Write the MA_Vault sheet with Quarter and Tier columns in tables
  */
-writeVault(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay) {
-  if (teamAssay === undefined) teamAssay = {};
-  if (matchupAssay === undefined) matchupAssay = {};
-  if (!this.log) this.init();
-  Log_.section("Writing Vault");
+  writeVaultFlat(ss, allBets, leagueAssay, teamAssay, matchupAssay, edges) {
+    const SHEET_NAME = Config_.sheets.vault || "MA_Vault";
+    const HEADERS = [
+      "Bet Index (rowIndex)",
+      "Source",
+      "League",
+      "Date",
+      "Matchup",
+      "Pick",
+      "Type",
+      "Confidence",
+      "Conf Bucket",
+      "Grade",
+      "Purity Status",
+      "Backed Team",
+      "Opponent",
+      "Spread / Line",
+      "Result / Outcome"
+    ];
 
-  const sheet = this.getOrCreateSheet(ss, Config_.sheets.vault);
-  sheet.clear();
+    let sheet = ss.getSheetByName(SHEET_NAME);
+    if (!sheet) {
+      sheet = ss.insertSheet(SHEET_NAME);
+    } else {
+      sheet.clearContents();
+    }
 
-  const now = Utils_.formatDate(new Date(), "yyyy-MM-dd HH:mm:ss");
+    // Write headers
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+    sheet.getRange(1, 1, 1, HEADERS.length)
+      .setFontWeight("bold")
+      .setBackground("#1a1a2e")
+      .setFontColor("#ffffff");
+    sheet.setFrozenRows(1);
 
-  const safeGlobalWR =
-    (globalStats && typeof globalStats.winRate === "number" && isFinite(globalStats.winRate)) ? globalStats.winRate : 0;
-  const safeSideWR =
-    (sideStats && typeof sideStats.winRate === "number" && isFinite(sideStats.winRate)) ? sideStats.winRate : 0;
-  const safeTotalsWR =
-    (totalsStats && typeof totalsStats.winRate === "number" && isFinite(totalsStats.winRate)) ? totalsStats.winRate : 0;
-  const safePct = (v) => (typeof v === "number" && isFinite(v)) ? Stats_.pct(v) : "N/A";
+    if (!allBets || allBets.length === 0) return;
 
-  const globalGrade = Stats_.getGradeInfo(safeGlobalWR, globalStats ? globalStats.decisive || 0 : 0);
+    const rows = allBets.map((bet, i) => {
+      // Evaluate each bet through the Flagger to get bestGrade and status
+      const flagResult = (typeof Flagger_ !== "undefined" && Flagger_.flagBet)
+        ? Flagger_.flagBet(bet, leagueAssay, teamAssay, matchupAssay, edges)
+        : { bestGrade: "N/A", status: "UNGRADED" };
 
-  const MAX_COLS = 10;
-  const data = [];
+      const bestGrade = flagResult.bestGrade || "N/A";
+      const status    = flagResult.status    || "UNGRADED";
 
-  // Title
-  data.push([`⚗️ MA ASSAYER VAULT — v${Config_.version}`, "", "", "", "", "", "", "", "", now]);
-  data.push([""]);
-  data.push(["═══════════════════════════════════════════════════════════════════"]);
-  data.push(["📊 PURITY ASSESSMENT"]);
-  data.push([""]);
-
-  // Stats
-  data.push(["Metric", "SIDE", "TOTALS", "COMBINED", "Grade", "Status"]);
-  data.push(["Bets Assayed", sideStats ? sideStats.decisive || 0 : 0, totalsStats ? totalsStats.decisive || 0 : 0, globalStats ? globalStats.decisive || 0 : 0, "", ""]);
-  data.push(["Wins", sideStats ? sideStats.wins || 0 : 0, totalsStats ? totalsStats.wins || 0 : 0, globalStats ? globalStats.wins || 0 : 0, "", ""]);
-  data.push(["Losses", sideStats ? sideStats.losses || 0 : 0, totalsStats ? totalsStats.losses || 0 : 0, globalStats ? globalStats.losses || 0 : 0, "", ""]);
-  data.push([
-    "Win Rate",
-    safePct(safeSideWR),
-    safePct(safeTotalsWR),
-    safePct(safeGlobalWR),
-    `${globalGrade.symbol} ${globalGrade.name}`,
-    (globalStats ? globalStats.decisive || 0 : 0) >= Config_.thresholds.minNReliable ? "✅ Reliable" : "📊 Building"
-  ]);
-
-  data.push([""]);
-  data.push(["═══════════════════════════════════════════════════════════════════"]);
-  data.push(["🔍 TOP DISCOVERED EDGES (Gold+)"]);
-  data.push([""]);
-  data.push(["Pattern", "Source", "Type", "N", "Win Rate", "Lift", "Grade"]);
-
-  const topEdges = (Array.isArray(edges) ? edges : [])
-    .filter(e => e.grade === "GOLD" || e.grade === "PLATINUM")
-    .slice(0, Config_.report.maxEdgesToShow);
-
-  if (topEdges.length === 0) {
-    data.push(["No Gold/Platinum edges discovered yet"]);
-  } else {
-    topEdges.forEach(e => {
-      // ◆ PATCH: Force display type for Side edges (display-only; does not mutate criteria)
-      const typeKey =
-        (e.source === "Side")
-          ? "SNIPER_MARGIN"
-          : ((e.criteria && e.criteria.typeKey) ? e.criteria.typeKey : "");
-
-      data.push([e.name, e.source, typeKey, e.n, e.winRatePct, e.liftDisplay, `${e.gradeSymbol} ${e.grade}`]);
+      return [
+        i + 1,                                        // Bet Index (rowIndex)
+        bet.source        || "",                       // Source
+        bet.league        || "",                       // League
+        bet.date          || "",                       // Date
+        bet.matchup       || `${bet.home} vs ${bet.away}` || "",  // Matchup
+        bet.pick          || "",                       // Pick
+        bet.type          || bet.betType || "",        // Type
+        bet.confidence    || "",                       // Confidence
+        bet.confBucket    || "",                       // Conf Bucket
+        bestGrade,                                     // Grade
+        status,                                        // Purity Status
+        bet.backedTeam    || "",                       // Backed Team
+        bet.opponent      || "",                       // Opponent
+        bet.line          || bet.spread || "",         // Spread / Line
+        bet.result        || bet.outcome || ""         // Result / Outcome
+      ];
     });
-  }
 
-  // ── LEAGUES: TOP ──
-  data.push([""]);
-  data.push(["═══════════════════════════════════════════════════════════════════"]);
-  data.push(["🏆 TOP LEAGUES BY PURITY (All-Quarter)"]);
-  data.push([""]);
-  data.push(["League", "Quarter", "Source", "Gender", "Tier", "Type", "N", "Win Rate", "Grade", "Status"]);
+    if (rows.length > 0) {
+      sheet.getRange(2, 1, rows.length, HEADERS.length).setValues(rows);
+    }
 
-  const combos = Object.values(leagueAssay || {});
-  const topCombos = combos
-    .filter(l => (l ? l.quarter == null : false) && ((l ? l.decisive || 0 : 0) >= 5))
-    .sort((a, b) => (b.shrunkRate || 0) - (a.shrunkRate || 0))
-    .slice(0, Config_.report.maxLeaguesToShow);
+    // Auto-resize columns for readability
+    for (let c = 1; c <= HEADERS.length; c++) {
+      sheet.autoResizeColumn(c);
+    }
 
-  topCombos.forEach(l => {
-    let status = "📊 Building";
-    if (l.isToxic) status = "⚠️ Toxic";
-    else if (l.isReliable) status = "✅ Reliable";
-    else if (l.isElite) status = "🌟 Elite";
+    Logger.log(`[writeVaultFlat] Wrote ${rows.length} flat records to "${SHEET_NAME}".`);
+  },
 
+  writeVaultDashboard(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay) {
+    const SHEET_NAME = Config_.sheets.vaultDashboard || "MA_Vault_Dashboard";
+
+    let sheet = ss.getSheetByName(SHEET_NAME);
+    if (!sheet) {
+      sheet = ss.insertSheet(SHEET_NAME);
+    } else {
+      sheet.clearContents();
+      sheet.clearFormats();
+    }
+
+    // ── Delegate all original writeVault visual rendering to this sheet ──
+    this._renderVaultDashboardBody_(sheet, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay);
+
+    Logger.log(`[writeVaultDashboard] Dashboard rendered to "${SHEET_NAME}".`);
+  },
+
+  _renderVaultDashboardBody_(sheet, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay) {
+    if (teamAssay === undefined) teamAssay = {};
+    if (matchupAssay === undefined) matchupAssay = {};
+    if (!this.log) this.init();
+    Log_.section("Writing Vault Dashboard Body");
+
+    const now = Utils_.formatDate(new Date(), "yyyy-MM-dd HH:mm:ss");
+
+    const safeGlobalWR =
+      (globalStats && typeof globalStats.winRate === "number" && isFinite(globalStats.winRate)) ? globalStats.winRate : 0;
+    const safeSideWR =
+      (sideStats && typeof sideStats.winRate === "number" && isFinite(sideStats.winRate)) ? sideStats.winRate : 0;
+    const safeTotalsWR =
+      (totalsStats && typeof totalsStats.winRate === "number" && isFinite(totalsStats.winRate)) ? totalsStats.winRate : 0;
+    const safePct = (v) => (typeof v === "number" && isFinite(v)) ? Stats_.pct(v) : "N/A";
+
+    const globalGrade = Stats_.getGradeInfo(safeGlobalWR, globalStats ? globalStats.decisive || 0 : 0);
+
+    const MAX_COLS = 10;
+    const data = [];
+
+    // Title
+    data.push([`⚗️ MA ASSAYER VAULT — v${Config_.version}`, "", "", "", "", "", "", "", "", now]);
+    data.push([""]);
+    data.push(["═══════════════════════════════════════════════════════════════════"]);
+    data.push(["📊 PURITY ASSESSMENT"]);
+    data.push([""]);
+
+    // Stats
+    data.push(["Metric", "SIDE", "TOTALS", "COMBINED", "Grade", "Status"]);
+    data.push(["Bets Assayed", sideStats ? sideStats.decisive || 0 : 0, totalsStats ? totalsStats.decisive || 0 : 0, globalStats ? globalStats.decisive || 0 : 0, "", ""]);
+    data.push(["Wins", sideStats ? sideStats.wins || 0 : 0, totalsStats ? totalsStats.wins || 0 : 0, globalStats ? globalStats.wins || 0 : 0, "", ""]);
+    data.push(["Losses", sideStats ? sideStats.losses || 0 : 0, totalsStats ? totalsStats.losses || 0 : 0, globalStats ? globalStats.losses || 0 : 0, "", ""]);
     data.push([
-      l.league || "",
-      l.quarterLabel || "All",
-      l.source || "",
-      l.gender || (l.isWomen ? "W" : "M"),
-      l.tier || "UNKNOWN",
-      l.typeKey || "",
-      l.decisive || 0,
-      Stats_.pct(l.shrunkRate || 0),
-      `${l.gradeSymbol || ""} ${l.grade || ""}`.trim(),
-      status
+      "Win Rate",
+      safePct(safeSideWR),
+      safePct(safeTotalsWR),
+      safePct(safeGlobalWR),
+      `${globalGrade.symbol} ${globalGrade.name}`,
+      (globalStats ? globalStats.decisive || 0 : 0) >= Config_.thresholds.minNReliable ? "✅ Reliable" : "📊 Building"
     ]);
-  });
 
-  // ── LEAGUES: LOW ──
-  data.push([""]);
-  data.push(["═══════════════════════════════════════════════════════════════════"]);
-  data.push(["⛏️ LOW PERFORMING COMBINATIONS (All-Quarter)"]);
-  data.push([""]);
+    data.push([""]);
+    data.push(["═══════════════════════════════════════════════════════════════════"]);
+    data.push(["🔍 TOP DISCOVERED EDGES (Gold+)"]);
+    data.push([""]);
+    data.push(["Pattern", "Source", "Type", "N", "Win Rate", "Lift", "Grade"]);
 
-  const lowCombos = combos
-    .filter(l => (l ? l.quarter == null : false) && (l.grade === "CHARCOAL" || l.isToxic))
-    .sort((a, b) => (a.shrunkRate || 0) - (b.shrunkRate || 0))
-    .slice(0, Config_.report.maxToxicToShow);
+    const topEdges = (Array.isArray(edges) ? edges : [])
+      .filter(e => e.grade === "GOLD" || e.grade === "PLATINUM")
+      .slice(0, Config_.report.maxEdgesToShow);
 
-  if (lowCombos.length === 0) {
-    data.push(["No low-performing combinations identified"]);
-  } else {
-    data.push(["League", "Quarter", "Source", "Gender", "Tier", "Type", "N", "Win Rate", "Grade", "Action"]);
-    lowCombos.forEach(l => {
-      const action =
-        l.grade === "CHARCOAL"
-          ? "⛔ AVOID"
-          : (l.isToxic ? "⚠️ REVIEW (Predefined)" : "⚠️ REVIEW");
+    if (topEdges.length === 0) {
+      data.push(["No Gold/Platinum edges discovered yet"]);
+    } else {
+      topEdges.forEach(e => {
+        // ◆ PATCH: Force display type for Side edges (display-only; does not mutate criteria)
+        const typeKey =
+          (e.source === "Side")
+            ? "SNIPER_MARGIN"
+            : ((e.criteria && e.criteria.typeKey) ? e.criteria.typeKey : "");
+
+        data.push([e.name, e.source, typeKey, e.n, e.winRatePct, e.liftDisplay, `${e.gradeSymbol} ${e.grade}`]);
+      });
+    }
+
+    // ── LEAGUES: TOP ──
+    data.push([""]);
+    data.push(["═══════════════════════════════════════════════════════════════════"]);
+    data.push(["🏆 TOP LEAGUES BY PURITY (All-Quarter)"]);
+    data.push([""]);
+    data.push(["League", "Quarter", "Source", "Gender", "Tier", "Type", "N", "Win Rate", "Grade", "Status"]);
+
+    const combos = Object.values(leagueAssay || {});
+    const topCombos = combos
+      .filter(l => (l ? l.quarter == null : false) && ((l ? l.decisive || 0 : 0) >= 5))
+      .sort((a, b) => (b.shrunkRate || 0) - (a.shrunkRate || 0))
+      .slice(0, Config_.report.maxLeaguesToShow);
+
+    topCombos.forEach(l => {
+      let status = "📊 Building";
+      if (l.isToxic) status = "⚠️ Toxic";
+      else if (l.isReliable) status = "✅ Reliable";
+      else if (l.isElite) status = "🌟 Elite";
 
       data.push([
         l.league || "",
@@ -223,111 +279,146 @@ writeVault(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssa
         l.decisive || 0,
         Stats_.pct(l.shrunkRate || 0),
         `${l.gradeSymbol || ""} ${l.grade || ""}`.trim(),
-        action
+        status
       ]);
     });
-  }
 
-  // ── TEAMS: PLATINUM / GOLD ──
-  const allTeams = Object.values(teamAssay || {});
-  const allQuarterTeams = allTeams.filter(t => t.quarter == null);
-
-  data.push([""]);
-  data.push(["═══════════════════════════════════════════════════════════════════"]);
-  data.push(["💎 TOP PLATINUM & GOLD TEAMS (All-Quarter, Side)"]);
-  data.push([""]);
-  data.push(["Team", "N", "Shrunk WR", "Lift", "Grade", "Status", "Leagues"]);
-
-  const topTeams = allQuarterTeams
-    .filter(t => t.grade === "PLATINUM" || t.grade === "GOLD")
-    .sort((a, b) => (b.shrunkRate || 0) - (a.shrunkRate || 0))
-    .slice(0, 12);
-
-  if (topTeams.length === 0) {
-    data.push(["No Platinum/Gold teams yet"]);
-  } else {
-    topTeams.forEach(t => {
-      const status = t.isElite ? "🌟 Elite" : (t.isReliable ? "✅ Reliable" : "📊 Building");
-      data.push([
-        t.team || "",
-        t.decisive || 0,
-        Stats_.pct(t.shrunkRate || 0),
-        Stats_.lift(t.lift || 0),
-        `${t.gradeSymbol || ""} ${t.grade || ""}`.trim(),
-        status,
-        Array.isArray(t.leagues) ? t.leagues.slice(0, 4).join(", ") : ""
-      ]);
-    });
-  }
-
-  // ── TEAMS: CHARCOAL / TOXIC ──
-  data.push([""]);
-  data.push(["═══════════════════════════════════════════════════════════════════"]);
-  data.push(["⛔ CHARCOAL TEAMS TO AVOID (All-Quarter, Side)"]);
-  data.push([""]);
-
-  const charcoalTeams = allQuarterTeams
-    .filter(t => t.grade === "CHARCOAL" || t.isToxic)
-    .sort((a, b) => (a.shrunkRate || 0) - (b.shrunkRate || 0))
-    .slice(0, 12);
-
-  if (charcoalTeams.length === 0) {
-    data.push(["No Charcoal teams identified"]);
-  } else {
-    data.push(["Team", "N", "Shrunk WR", "Lift", "Grade", "Action", "Leagues"]);
-    charcoalTeams.forEach(t => {
-      const action = t.isToxic ? "⚠️ REVIEW (Config)" : "⛔ AVOID";
-      data.push([
-        t.team || "",
-        t.decisive || 0,
-        Stats_.pct(t.shrunkRate || 0),
-        Stats_.lift(t.lift || 0),
-        `${t.gradeSymbol || ""} ${t.grade || ""}`.trim(),
-        action,
-        Array.isArray(t.leagues) ? t.leagues.slice(0, 4).join(", ") : ""
-      ]);
-    });
-  }
-
-  // ── MATCHUP COUNT ──
-  const matchupCount = Object.keys(matchupAssay || {}).length;
-  if (matchupCount > 0) {
+    // ── LEAGUES: LOW ──
     data.push([""]);
     data.push(["═══════════════════════════════════════════════════════════════════"]);
-    data.push([`💠 ${matchupCount} Matchups analyzed (see MA_MatchupAssay tab)`]);
-  }
+    data.push(["⛏️ LOW PERFORMING COMBINATIONS (All-Quarter)"]);
+    data.push([""]);
 
-  // ── FOOTER ──
-  data.push([""]);
-  data.push(["═══════════════════════════════════════════════════════════════════"]);
-  data.push([`"Ma Assayer tests the purity — trust only the Gold"`]);
+    const lowCombos = combos
+      .filter(l => (l ? l.quarter == null : false) && (l.grade === "CHARCOAL" || l.isToxic))
+      .sort((a, b) => (a.shrunkRate || 0) - (b.shrunkRate || 0))
+      .slice(0, Config_.report.maxToxicToShow);
 
-  const paddedData = data.map(row => {
-    const r = Array.isArray(row) ? row : [row];
-    if (r.length === MAX_COLS) return r;
-    if (r.length < MAX_COLS) return r.concat(Array(MAX_COLS - r.length).fill(""));
-    return r.slice(0, MAX_COLS);
-  });
+    if (lowCombos.length === 0) {
+      data.push(["No low-performing combinations identified"]);
+    } else {
+      data.push(["League", "Quarter", "Source", "Gender", "Tier", "Type", "N", "Win Rate", "Grade", "Action"]);
+      lowCombos.forEach(l => {
+        const action =
+          l.grade === "CHARCOAL"
+            ? "⛔ AVOID"
+            : (l.isToxic ? "⚠️ REVIEW (Predefined)" : "⚠️ REVIEW");
 
-  sheet.getRange(1, 1, paddedData.length, MAX_COLS).setValues(paddedData);
+        data.push([
+          l.league || "",
+          l.quarterLabel || "All",
+          l.source || "",
+          l.gender || (l.isWomen ? "W" : "M"),
+          l.tier || "UNKNOWN",
+          l.typeKey || "",
+          l.decisive || 0,
+          Stats_.pct(l.shrunkRate || 0),
+          `${l.gradeSymbol || ""} ${l.grade || ""}`.trim(),
+          action
+        ]);
+      });
+    }
 
-  sheet.getRange("A1").setFontSize(16).setFontWeight("bold");
-  sheet.setFrozenRows(1);
+    // ── TEAMS: PLATINUM / GOLD ──
+    const allTeams = Object.values(teamAssay || {});
+    const allQuarterTeams = allTeams.filter(t => t.quarter == null);
 
-  sheet.setColumnWidth(1, 220);
-  sheet.setColumnWidth(2, 90);
-  sheet.setColumnWidth(3, 110);
-  sheet.setColumnWidth(4, 80);
-  sheet.setColumnWidth(5, 120);
-  sheet.setColumnWidth(6, 140);
-  sheet.setColumnWidth(7, 70);
-  sheet.setColumnWidth(8, 110);
-  sheet.setColumnWidth(9, 140);
-  sheet.setColumnWidth(10, 180);
+    data.push([""]);
+    data.push(["═══════════════════════════════════════════════════════════════════"]);
+    data.push(["💎 TOP PLATINUM & GOLD TEAMS (All-Quarter, Side)"]);
+    data.push([""]);
+    data.push(["Team", "N", "Shrunk WR", "Lift", "Grade", "Status", "Leagues"]);
 
-  this.log.success("Vault written successfully (with team sections)");
-  Log_.sectionEnd("Writing Vault");
-},
+    const topTeams = allQuarterTeams
+      .filter(t => t.grade === "PLATINUM" || t.grade === "GOLD")
+      .sort((a, b) => (b.shrunkRate || 0) - (a.shrunkRate || 0))
+      .slice(0, 12);
+
+    if (topTeams.length === 0) {
+      data.push(["No Platinum/Gold teams yet"]);
+    } else {
+      topTeams.forEach(t => {
+        const status = t.isElite ? "🌟 Elite" : (t.isReliable ? "✅ Reliable" : "📊 Building");
+        data.push([
+          t.team || "",
+          t.decisive || 0,
+          Stats_.pct(t.shrunkRate || 0),
+          Stats_.lift(t.lift || 0),
+          `${t.gradeSymbol || ""} ${t.grade || ""}`.trim(),
+          status,
+          Array.isArray(t.leagues) ? t.leagues.slice(0, 4).join(", ") : ""
+        ]);
+      });
+    }
+
+    // ── TEAMS: CHARCOAL / TOXIC ──
+    data.push([""]);
+    data.push(["═══════════════════════════════════════════════════════════════════"]);
+    data.push(["⛔ CHARCOAL TEAMS TO AVOID (All-Quarter, Side)"]);
+    data.push([""]);
+
+    const charcoalTeams = allQuarterTeams
+      .filter(t => t.grade === "CHARCOAL" || t.isToxic)
+      .sort((a, b) => (a.shrunkRate || 0) - (b.shrunkRate || 0))
+      .slice(0, 12);
+
+    if (charcoalTeams.length === 0) {
+      data.push(["No Charcoal teams identified"]);
+    } else {
+      data.push(["Team", "N", "Shrunk WR", "Lift", "Grade", "Action", "Leagues"]);
+      charcoalTeams.forEach(t => {
+        const action = t.isToxic ? "⚠️ REVIEW (Config)" : "⛔ AVOID";
+        data.push([
+          t.team || "",
+          t.decisive || 0,
+          Stats_.pct(t.shrunkRate || 0),
+          Stats_.lift(t.lift || 0),
+          `${t.gradeSymbol || ""} ${t.grade || ""}`.trim(),
+          action,
+          Array.isArray(t.leagues) ? t.leagues.slice(0, 4).join(", ") : ""
+        ]);
+      });
+    }
+
+    // ── MATCHUP COUNT ──
+    const matchupCount = Object.keys(matchupAssay || {}).length;
+    if (matchupCount > 0) {
+      data.push([""]);
+      data.push(["═══════════════════════════════════════════════════════════════════"]);
+      data.push([`💠 ${matchupCount} Matchups analyzed (see MA_MatchupAssay tab)`]);
+    }
+
+    // ── FOOTER ──
+    data.push([""]);
+    data.push(["═══════════════════════════════════════════════════════════════════"]);
+    data.push([`"Ma Assayer tests the purity — trust only the Gold"`]);
+
+    const paddedData = data.map(row => {
+      const r = Array.isArray(row) ? row : [row];
+      if (r.length === MAX_COLS) return r;
+      if (r.length < MAX_COLS) return r.concat(Array(MAX_COLS - r.length).fill(""));
+      return r.slice(0, MAX_COLS);
+    });
+
+    sheet.getRange(1, 1, paddedData.length, MAX_COLS).setValues(paddedData);
+
+    sheet.getRange("A1").setFontSize(16).setFontWeight("bold");
+    sheet.setFrozenRows(1);
+
+    sheet.setColumnWidth(1, 220);
+    sheet.setColumnWidth(2, 90);
+    sheet.setColumnWidth(3, 110);
+    sheet.setColumnWidth(4, 80);
+    sheet.setColumnWidth(5, 120);
+    sheet.setColumnWidth(6, 140);
+    sheet.setColumnWidth(7, 70);
+    sheet.setColumnWidth(8, 110);
+    sheet.setColumnWidth(9, 140);
+    sheet.setColumnWidth(10, 180);
+
+    this.log.success("Vault Dashboard written successfully (with team sections)");
+    Log_.sectionEnd("Writing Vault Dashboard Body");
+  },
 
 
  // ============================================================================

@@ -71,7 +71,8 @@ const Main_ = {
     const exclusionImpact = Stats_.calcExclusionImpact(allBets, globalStats);
     
     // 7. Write Outputs
-    Output_.writeVault(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay);
+    Output_.writeVaultFlat(ss, allBets, leagueAssay, teamAssay, matchupAssay, edges);
+    Output_.writeVaultDashboard(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay);
     Output_.writeLeagueAssay(ss, leagueAssay, globalStats);
     Output_.writeDiscoveredEdges(ss, edges, globalStats);
     Output_.writeExclusionImpact(ss, exclusionImpact, globalStats);
@@ -134,12 +135,11 @@ const Main_ = {
 
      Log_.writeToSheet(ss);
      SpreadsheetApp.getUi().alert("Flags Re-Applied Successfully.");
-    
-   } catch (err) {
-     Log_.error(`FLAGGER FAILED: ${err.message}`);
-     Log_.writeToSheet(ss);
-   }
- },
+       } catch (err) {
+      Log_.error(`FLAGGER FAILED: ${err.message}`);
+      Log_.writeToSheet(ss);
+    }
+  },
 };
 
 /**
