@@ -133,115 +133,90 @@ const Output_ = {
       return t !== "UNKNOWN" && t !== "";
     });
 
-    // normaliseConfBucket — accepts tier names, pct-range strings, and raw numeric scores.
-    // confBuckets from getConfBucket() return labels like "<55%", "55-60%", "65-70%", "≥70%".
-    // Some bets have confBucket=null (confidence out of range) and tier="UNKNOWN" → return "".
-    function normaliseConfBucket(raw) {
-      if (raw === null || raw === undefined || raw === '') return '';
-      const s = String(raw).trim();
-      const up = s.toUpperCase();
-      // Empty or UNKNOWN tier → blank (no usable confidence info)
-      if (up === '' || up === 'UNKNOWN') return '';
-      // Already a canonical tier name
-      if (['ELITE','STRONG','MEDIUM','EVEN','WEAK'].includes(up)) return up;
-      // Already a pct-range string — extended to allow decimals: "55-60%", "<55%", "≥70%", "65.5-70%"
-      if (/^[≥≤<>]?\d+(\.\d+)?[-–]?\d*(\.\d+)?%?$/.test(s)) return s;
-      // Raw decimal [0.0–1.0]
-      const numVal = parseFloat(s);
-      if (!isNaN(numVal) && numVal >= 0 && numVal <= 1.0) {
-        const pct = numVal * 100;
-        if (pct >= 70) return '≥70%';
-        if (pct >= 65) return '65-70%';
-        if (pct >= 60) return '60-65%';
-        if (pct >= 55) return '55-60%';
-        return '<55%';
-      }
-      // Raw integer percentage [2–100]
-      if (!isNaN(numVal) && numVal > 1 && numVal <= 100) {
-        if (numVal >= 70) return '≥70%';
-        if (numVal >= 65) return '65-70%';
-        if (numVal >= 60) return '60-65%';
-        if (numVal >= 55) return '55-60%';
-        return '<55%';
-      }
-      // Truly unrecognised — log for diagnosis and return blank
-      Logger.log('[normaliseConfBucket] Unhandled value: ' + JSON.stringify(raw) + ' → returning empty');
-      return '';
-    }
-
-    // extractLineFromPick: when the satellite's line column is blank, the spread
-    // is encoded in the pick string (e.g. "Q1: H +4.5" → "+4.5").
-    function extractLineFromPick(pick) {
-      if (!pick) return '';
-      const m = String(pick).match(/([+-]\d+(?:\.\d+)?)\s*$/);
-      return m ? m[1] : '';
-    }
-
     const rows = betsToWrite.map((bet, i) => {
-      // Source: satellite_name is always populated from fleet import.
-      // Must be resolved BEFORE flagBet so evaluateRow builds correct leagueAssay keys.
-      // Fleet bets have no bet.source by default — without it, evaluateRow falls back to
-      // betSource='Totals' (because bet.direction exists), building wrong keys like
-      // "NBB_Totals_M_STRONG" instead of "NBB_Fleet_M_STRONG" → leagueInfo = null → CHARCOAL.
-      const source = bet.satellite_name || bet.satelliteName || bet.source || '';
-      if (!bet.source && source) bet.source = source;  // ← inject for evaluateRow
+      // Inject source BEFORE flagBet — fleet bets have satellite_name but no .source,
+      // so evaluateRow would fall to betSource='Totals' and miss leagueAssay keys.
+      if (!bet.source) bet.source = bet.satellite_name || '';
 
-      // NOTE: flagBet signature = (bet, edges, leagueAssay, teamAssay, matchupAssay)
-      const flagResult = (typeof Flagger_ !== 'undefined' && Flagger_.flagBet)
-        ? Flagger_.flagBet(bet, edges, leagueAssay, teamAssay, matchupAssay)
-        : { bestGrade: 'N/A', status: 'UNGRADED' };
+      // Evaluate purity grade + status — try/catch so a throw never aborts the writer
+      let flagResult = { bestGrade: '🜃 CHARCOAL', status: '—' };
+      try {
+        if (typeof Flagger_ !== 'undefined' && Flagger_.flagBet) {
+          flagResult = Flagger_.flagBet(bet, edges, leagueAssay, teamAssay, matchupAssay) || flagResult;
+        }
+      } catch (e) { /* silent — grade stays CHARCOAL */ }
 
-      const bestGrade = flagResult.bestGrade || 'N/A';
-      const status    = flagResult.status    || 'UNGRADED';
+      const bestGrade = flagResult.bestGrade || flagResult.grade || '🜃 CHARCOAL';
+      const status    = flagResult.status    || '—';
 
-      // Derive backed team + opponent from direction + home/away.
-      // Do NOT use bet.pick as a fallback — it contains pick strings like "Q1: H +4.5"
-      // which look like team names but are not. Leave blank when home/away unavailable.
+      // Clean pick string — strip embedded confidence annotation markers that some
+      // satellites embed inline: "Q2: A +9.0 ★ (75%) ★" → "Q2: A +9.0"
+      const cleanedPick = String(bet.pick || '')
+        .replace(/\s*[★●○◆▲▼]\s*\(\d+(?:\.\d+)?%\)\s*[★●○◆▲▼]?\s*/g, '')
+        .replace(/\s*\(\d+(?:\.\d+)?%\)\s*/g, '')
+        .trim();
+
+      // Derive backed team + opponent from direction + home/away ONLY.
+      // Never use pick string as a team name — it contains spread tokens.
       const direction = String(bet.direction || '').toUpperCase().trim();
-      const home      = bet.home || '';
-      const away      = bet.away || '';
+      const home      = String(bet.home      || '').trim();
+      const away      = String(bet.away      || '').trim();
       let backedTeam  = '';
       let opponent    = '';
-      if (direction === 'HOME' && home) { backedTeam = home; opponent = away; }
+      if      (direction === 'HOME' && home) { backedTeam = home; opponent = away; }
       else if (direction === 'AWAY' && away) { backedTeam = away; opponent = home; }
-      // Only use bet.pick as a team name if it doesn't look like a pick string
-      else if (bet.pick && !bet.pick.includes(':') && !/[+\-]\d/.test(bet.pick)) {
-        backedTeam = bet.pick;
+
+      // Matchup: match field from schema, then construct from home/away
+      const matchup = bet.match || (home && away ? `${home} vs ${away}` : '');
+
+      // Spread / Line: bet.line from schema first, then extract from cleaned pick
+      // (many satellites encode spread inside the pick string: "Q1: H +4.5")
+      const line = String(bet.line || '').trim()
+        || (String(cleanedPick).match(/([+-]\d+(?:\.\d+)?)\s*$/)?.[1] ?? '');
+
+      // Result / Outcome — full coercion chain, handles boolean/null/undefined
+      const coerce = v => (v === null || v === undefined || v === false || v === true)
+                          ? '' : String(v).trim();
+      const finalResult = coerce(bet.outcome) || coerce(bet.result) || coerce(bet.actual) || '';
+
+      // Conf Bucket — inline normalisation, no external function
+      const rawBucket = String(bet.confBucket || bet.tier || '').trim().toUpperCase();
+      let confBucket = rawBucket;
+      if (rawBucket === '' || rawBucket === 'UNKNOWN') {
+        confBucket = '';
+      } else if (!['ELITE', 'STRONG', 'MEDIUM', 'EVEN', 'WEAK'].includes(rawBucket)) {
+        const pctRe = /^[≥≤<>]?\d+(\.\d+)?[-–]?\d*(\.\d+)?%?$/;
+        if (pctRe.test(rawBucket)) {
+          confBucket = rawBucket; // already a valid pct-range string
+        } else {
+          const nb = parseFloat(rawBucket);
+          if (!isNaN(nb) && nb >= 0 && nb <= 1) {
+            const p = Math.round(nb * 100);
+            confBucket = p >= 70 ? '≥70%' : p >= 65 ? '65-70%' : p >= 60 ? '60-65%' : p >= 55 ? '55-60%' : '<55%';
+          } else if (!isNaN(nb) && nb > 1 && nb <= 100) {
+            confBucket = nb >= 70 ? '≥70%' : nb >= 65 ? '65-70%' : nb >= 60 ? '60-65%' : nb >= 55 ? '55-60%' : '<55%';
+          } else {
+            confBucket = '';
+          }
+        }
       }
 
-      // Matchup: prefer bet.match (always set by parser), then construct, then pick
-      const matchup = bet.match || bet.matchup ||
-        (home && away ? `${home} vs ${away}` : bet.pick || '');
-
-      // Conf Bucket: prefer confBucket, fall back to tier — normalise whatever value we get
-      const confBucket = normaliseConfBucket(bet.confBucket || bet.tier || '');
-
-      // Line: the spread/handicap value — bet.line, NOT bet.odds (that's the price).
-      // Many satellite sheets leave the line column blank because the spread is
-      // encoded in the pick string (e.g. "Q1: H +4.5"). Extract it as a fallback.
-      const line = (bet.line !== undefined && bet.line !== null && bet.line !== '')
-        ? bet.line
-        : extractLineFromPick(bet.pick || '');
-
-      // Result: prefer outcome (WIN/LOSS/PUSH), then actual (score value)
-      const result = bet.outcome || bet.actual || bet.result || '';
-
       return [
-        i + 1,               // Col 1:  Bet Index
-        source,              // Col 2:  Source (satellite name)
-        bet.league || '',    // Col 3:  League
-        bet.date   || '',    // Col 4:  Date
-        matchup,             // Col 5:  Matchup
-        bet.pick   || '',    // Col 6:  Pick
-        bet.type   || bet.betType || '', // Col 7: Type
-        bet.confidence || '', // Col 8: Confidence
-        confBucket,          // Col 9:  Conf Bucket (tier)
-        bestGrade,           // Col 10: Grade
-        status,              // Col 11: Purity Status
-        backedTeam,          // Col 12: Backed Team
-        opponent,            // Col 13: Opponent
-        line,                // Col 14: Spread / Line
-        result               // Col 15: Result / Outcome
+        i + 1,                                                     // Col 1:  Bet Index
+        bet.satellite_name || bet.source || '',                    // Col 2:  Source
+        bet.league         || '',                                  // Col 3:  League
+        bet.date           || '',                                  // Col 4:  Date
+        matchup,                                                   // Col 5:  Matchup
+        cleanedPick,                                               // Col 6:  Pick (cleaned)
+        bet.type           || '',                                  // Col 7:  Type
+        bet.confidence     || '',                                  // Col 8:  Confidence
+        confBucket,                                                // Col 9:  Conf Bucket
+        bestGrade,                                                 // Col 10: Grade
+        status,                                                    // Col 11: Purity Status
+        backedTeam,                                                // Col 12: Backed Team
+        opponent,                                                  // Col 13: Opponent
+        line,                                                      // Col 14: Spread / Line
+        finalResult,                                               // Col 15: Result / Outcome
       ];
     });
 
