@@ -228,9 +228,9 @@ function runSheetInspector() {
     const VALID_RESULTS = ['WIN','LOSS','PUSH','W','L','P','','—','-'];
     const VALID_TYPES   = ['SNIPER_MARGIN','SNIPER_OU','1H_1X2','FT_O_U',
                            'SNIPER_HIGH_QTR','BANKER','ROBBER','FT_1X2','FIRST_HALF_1X2'];
-    // Conf Bucket can be either a tier name (ELITE/STRONG/MEDIUM/EVEN/WEAK)
-    // OR a confidence range string like "55-60%", "60-65%", "≥70%" — both are valid.
-    const PCT_RANGE_RE  = /^[≥≤]?\d+[-–]?\d*%?$/;
+    // Conf Bucket: valid if it's a tier name, a pct-range string, OR blank (UNKNOWN bets → empty).
+    // normaliseConfBucket output examples: "", "55-60%", "<55%", "≥70%", "65-70%", "ELITE"
+    const PCT_RANGE_RE  = /^[≥≤<>]?\d+(\.\d+)?[-–]?\d*(\.\d+)?%?$/;
 
     let blankSource=0,blankMatchup=0,blankGrade=0,unknownType=0,
         blankResult=0,blankBacked=0,blankLeague=0,unexpectedType=0,
@@ -297,8 +297,16 @@ function runSheetInspector() {
     const VALID_TIERS = ['ELITE','STRONG','MEDIUM','EVEN','WEAK','ALL','UNKNOWN',''];
     const tierIdx     = headers.indexOf('Tier');
     const nIdx        = Math.max(headers.indexOf('N'), headers.indexOf('n'), 5);
-    const wrIdx       = Math.max(headers.indexOf('Win Rate'), 8);
-    const gradeIdx    = Math.max(headers.indexOf('Grade'), 11);
+    // Header is 'Raw WR' (or 'Shrunk WR') not 'Win Rate' — find the right column
+    const wrIdx = (() => {
+      const candidates = ['Raw WR', 'Shrunk WR', 'Win Rate'];
+      for (const c of candidates) {
+        const i = headers.indexOf(c);
+        if (i >= 0) return i;
+      }
+      return 9; // fallback: col 10 (0-indexed 9) = Raw WR position
+    })();
+    const gradeIdx    = Math.max(headers.indexOf('Grade'), 14);
 
     let noTier=0,zeroN=0,missingLeague=0,winRateOOB=0;
     rows.forEach(row => {
@@ -341,12 +349,16 @@ function runSheetInspector() {
 
     const SYNTHETIC = ['HIGHEST Q','HIGHEST SCORING','HIGHEST QUARTER',
                        'HIGH QUARTER','HIGH QTR','HIGHEST QTR'];
+    // Shrunk WR is col index 5 in the TeamAssay sheet
+    // (Team=0, Quarter=1, N=2, Wins=3, Losses=4, Shrunk WR=5)
+    const { headers: teamHeaders } = readSheet(SHEET);
+    const shrunkIdx = teamHeaders.indexOf('Shrunk WR') >= 0 ? teamHeaders.indexOf('Shrunk WR') : 5;
+
     let synth=0,zeroN=0,badWR=0;
     rows.forEach(row => {
-      const team    = String(row[0]||'').trim().toUpperCase();
-      const n       = Number(row[2]||0);
-      // WR may be decimal or % formatted — parse safely
-      const wrRaw   = row[4];
+      const team = String(row[0]||'').trim().toUpperCase();
+      const n    = Number(row[2]||0);
+      const wrRaw   = row[shrunkIdx];
       const winRate = typeof wrRaw === 'number' ? wrRaw : parseFloat(String(wrRaw||'').replace('%','')) / 100;
       if (SYNTHETIC.some(s=>team.includes(s)) || team.startsWith('HIGHEST') || team.startsWith('HIGH Q')) synth++;
       if (n===0) zeroN++;

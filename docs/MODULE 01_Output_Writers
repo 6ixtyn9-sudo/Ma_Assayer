@@ -135,30 +135,38 @@ const Output_ = {
 
     // normaliseConfBucket — accepts tier names, pct-range strings, and raw numeric scores.
     // confBuckets from getConfBucket() return labels like "<55%", "55-60%", "65-70%", "≥70%".
-    // Some bets may have a raw decimal (0.72) or integer (72) confidence score.
+    // Some bets have confBucket=null (confidence out of range) and tier="UNKNOWN" → return "".
     function normaliseConfBucket(raw) {
       if (raw === null || raw === undefined || raw === '') return '';
       const s = String(raw).trim();
       const up = s.toUpperCase();
+      // Empty or UNKNOWN tier → blank (no usable confidence info)
+      if (up === '' || up === 'UNKNOWN') return '';
+      // Already a canonical tier name
       if (['ELITE','STRONG','MEDIUM','EVEN','WEAK'].includes(up)) return up;
-      if (/^[≥≤<>]?\d+[-–]?\d*%?$/.test(s)) return s; // e.g. "55-60%", "<55%", "≥70%"
+      // Already a pct-range string — extended to allow decimals: "55-60%", "<55%", "≥70%", "65.5-70%"
+      if (/^[≥≤<>]?\d+(\.\d+)?[-–]?\d*(\.\d+)?%?$/.test(s)) return s;
+      // Raw decimal [0.0–1.0]
       const numVal = parseFloat(s);
       if (!isNaN(numVal) && numVal >= 0 && numVal <= 1.0) {
         const pct = numVal * 100;
-        if (pct >= 70) return 'ELITE';
+        if (pct >= 70) return '≥70%';
         if (pct >= 65) return '65-70%';
         if (pct >= 60) return '60-65%';
         if (pct >= 55) return '55-60%';
         return '<55%';
       }
-      if (!isNaN(numVal) && numVal > 1) {
-        if (numVal >= 70) return 'ELITE';
+      // Raw integer percentage [2–100]
+      if (!isNaN(numVal) && numVal > 1 && numVal <= 100) {
+        if (numVal >= 70) return '≥70%';
         if (numVal >= 65) return '65-70%';
         if (numVal >= 60) return '60-65%';
         if (numVal >= 55) return '55-60%';
         return '<55%';
       }
-      return s;
+      // Truly unrecognised — log for diagnosis and return blank
+      Logger.log('[normaliseConfBucket] Unhandled value: ' + JSON.stringify(raw) + ' → returning empty');
+      return '';
     }
 
     const rows = betsToWrite.map((bet, i) => {
