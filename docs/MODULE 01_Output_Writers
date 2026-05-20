@@ -169,6 +169,14 @@ const Output_ = {
       return '';
     }
 
+    // extractLineFromPick: when the satellite's line column is blank, the spread
+    // is encoded in the pick string (e.g. "Q1: H +4.5" → "+4.5").
+    function extractLineFromPick(pick) {
+      if (!pick) return '';
+      const m = String(pick).match(/([+-]\d+(?:\.\d+)?)\s*$/);
+      return m ? m[1] : '';
+    }
+
     const rows = betsToWrite.map((bet, i) => {
       // Source: satellite_name is always populated from fleet import.
       // Must be resolved BEFORE flagBet so evaluateRow builds correct leagueAssay keys.
@@ -208,9 +216,12 @@ const Output_ = {
       // Conf Bucket: prefer confBucket, fall back to tier — normalise whatever value we get
       const confBucket = normaliseConfBucket(bet.confBucket || bet.tier || '');
 
-      // Line: the spread/handicap value — bet.line, NOT bet.odds (that's the price)
+      // Line: the spread/handicap value — bet.line, NOT bet.odds (that's the price).
+      // Many satellite sheets leave the line column blank because the spread is
+      // encoded in the pick string (e.g. "Q1: H +4.5"). Extract it as a fallback.
       const line = (bet.line !== undefined && bet.line !== null && bet.line !== '')
-        ? bet.line : '';
+        ? bet.line
+        : extractLineFromPick(bet.pick || '');
 
       // Result: prefer outcome (WIN/LOSS/PUSH), then actual (score value)
       const result = bet.outcome || bet.actual || bet.result || '';

@@ -225,7 +225,13 @@ function runSheetInspector() {
     });
 
     const VALID_TIERS   = ['ELITE','STRONG','MEDIUM','EVEN','WEAK',''];
-    const VALID_RESULTS = ['WIN','LOSS','PUSH','W','L','P','','—','-'];
+    const VALID_RESULTS = [
+      'WIN','LOSS','PUSH','W','L','P','','—','-',
+      // _normalizeOutcome_ in MODULE 11 maps outcomes to emoji strings
+      '✅ HIT','❌ MISS','🟡 PUSH',
+      // Also accept raw pass-throughs that _normalizeOutcome_ returns as-is
+      'HIT','MISS','VOID','REFUND'
+    ];
     const VALID_TYPES   = ['SNIPER_MARGIN','SNIPER_OU','1H_1X2','FT_O_U',
                            'SNIPER_HIGH_QTR','BANKER','ROBBER','FT_1X2','FIRST_HALF_1X2'];
     // Conf Bucket: valid if it's a tier name, a pct-range string, OR blank (UNKNOWN bets → empty).
@@ -271,7 +277,8 @@ function runSheetInspector() {
     if (unknownType    > 0) flag(SHEET,0,'Type',       '',unknownType+'/'+n+' rows still have type=UNKNOWN');
     if (unexpectedType > 3) flag(SHEET,0,'Type',       '',(unexpectedType-3)+' more rows have unrecognised type (first 3 flagged individually)');
     if (blankGrade     > 0) flag(SHEET,0,'Grade',      '',blankGrade+'/'+n+' rows have blank Grade');
-    if (blankBacked    > 0) flag(SHEET,0,'Backed Team','',blankBacked+'/'+n+' rows have blank Backed Team (expected for OU bets)');
+    // Blank backed team is EXPECTED for OU/over-under bets — INFO only, never flag
+    if (blankBacked    > 0) Logger.log('[Inspector] MA_Vault: '+blankBacked+'/'+n+' blank Backed Team — expected for OU bets');
     // Blank results are expected for pending/future bets — only flag if >80% are blank
     if (blankResult > n * 0.80) {
       flag(SHEET,0,'Result','',blankResult+'/'+n+' rows have blank Result — exceeds 80% threshold, possible writer bug');
