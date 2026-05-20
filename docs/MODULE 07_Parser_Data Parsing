@@ -706,7 +706,7 @@ const Parser_ = {
 
   var sheet = ss.getSheetByName(Config_.sheets.side);
   if (!sheet) {
-    this.log.warn("Side sheet not found");
+    this.log.info("Side sheet not found — fleet-only mode, skipping.");
     Log_.sectionEnd("Parsing Side Sheet");
     return { bets: [], columns: null, errors: ["Sheet not found"], stats: {} };
   }
@@ -967,7 +967,7 @@ const Parser_ = {
 
     const sheet = ss.getSheetByName(Config_.sheets.totals);
     if (!sheet) {
-      this.log.warn("Totals sheet not found");
+      this.log.info("Totals sheet not found — fleet-only mode, skipping.");
       Log_.sectionEnd("Parsing Totals Sheet");
       return { bets: [], columns: null, errors: ["Sheet not found"], stats: {} };
     }

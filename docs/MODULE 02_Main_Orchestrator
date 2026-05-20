@@ -57,6 +57,9 @@ const Main_ = {
     const globalStats = Stats_.calcBasic(allBets);
     const sideStats = Stats_.calcBasic(sideData.bets);
     const totalsStats = Stats_.calcBasic(totalsData.bets);
+    Logger.log("[ASSAY] Bet counts — total: " + allBets.length +
+      ", decisive (graded/resolved): " + (globalStats.decisive || 0) +
+      ", pending (no outcome): " + (allBets.length - (globalStats.decisive || 0)));
     
     // 4. League Assay
     const leagueAssay = Stats_.assayLeagues(allBets, globalStats);

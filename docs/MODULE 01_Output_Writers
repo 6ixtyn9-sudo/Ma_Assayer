@@ -129,8 +129,9 @@ const Output_ = {
 
     const rows = allBets.map((bet, i) => {
       // Evaluate each bet through the Flagger to get bestGrade and status
+      // NOTE: flagBet signature = (bet, edges, leagueAssay, teamAssay, matchupAssay)
       const flagResult = (typeof Flagger_ !== "undefined" && Flagger_.flagBet)
-        ? Flagger_.flagBet(bet, leagueAssay, teamAssay, matchupAssay, edges)
+        ? Flagger_.flagBet(bet, edges, leagueAssay, teamAssay, matchupAssay)
         : { bestGrade: "N/A", status: "UNGRADED" };
 
       const bestGrade = flagResult.bestGrade || "N/A";
@@ -213,10 +214,11 @@ const Output_ = {
     data.push([""]);
 
     // Stats
-    data.push(["Metric", "SIDE", "TOTALS", "COMBINED", "Grade", "Status"]);
-    data.push(["Bets Assayed", sideStats ? sideStats.decisive || 0 : 0, totalsStats ? totalsStats.decisive || 0 : 0, globalStats ? globalStats.decisive || 0 : 0, "", ""]);
+    data.push(["Metric", "Side/Classic", "Totals/Classic", "Fleet (All)", "Grade", "Status"]);
+    data.push(["Decisive (Graded)", sideStats ? sideStats.decisive || 0 : 0, totalsStats ? totalsStats.decisive || 0 : 0, globalStats ? globalStats.decisive || 0 : 0, "", ""]);
     data.push(["Wins", sideStats ? sideStats.wins || 0 : 0, totalsStats ? totalsStats.wins || 0 : 0, globalStats ? globalStats.wins || 0 : 0, "", ""]);
     data.push(["Losses", sideStats ? sideStats.losses || 0 : 0, totalsStats ? totalsStats.losses || 0 : 0, globalStats ? globalStats.losses || 0 : 0, "", ""]);
+    // NOTE: Side/Classic and Totals/Classic columns are 0 in fleet-only mode (no Side/Totals sheets).
     data.push([
       "Win Rate",
       safePct(safeSideWR),

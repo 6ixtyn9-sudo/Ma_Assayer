@@ -676,7 +676,10 @@ const Stats_ = {
       "OVER", "UNDER", "TOTAL", "TOTALS",
       "DRAW", "TIE", "PUSH",
       "Q1", "Q2", "Q3", "Q4",
-      "1H", "2H", "1Q", "2Q", "3Q", "4Q"
+      "1H", "2H", "1Q", "2Q", "3Q", "4Q",
+      // Synthetic SNIPER_HIGH_QTR routing labels — not real teams
+      "HIGHEST Q", "HIGHEST SCORING", "HIGHEST QUARTER",
+      "HIGH QUARTER", "HIGH Q", "HIGH QTR", "HIGHEST QTR"
     ];
 
     const validBets = all.filter(b => {
@@ -684,6 +687,9 @@ const Stats_ = {
       const t = String(b.backedTeam).trim().toUpperCase();
       if (t.length < 3)              return false;
       if (TEAM_BLOCKLIST.includes(t)) return false;
+      // Catch any remaining HIGHEST* / HIGH Q* patterns not in explicit list
+      if (t.startsWith("HIGHEST"))   return false;
+      if (t.startsWith("HIGH Q"))    return false;
       if (b.source === "Totals")     return false;
       if (b.direction)               return false;
       return true;
