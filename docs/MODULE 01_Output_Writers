@@ -856,13 +856,18 @@ writeSummary(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, logSum
     ["Session ID", logSummary?.sessionId || "N/A"]
   ];
 
+  // Determine the maximum number of columns across all rows in the data array.
+  // BY TYPE rows have 5 cols; most other rows have 1-2. Using a hardcoded 4
+  // caused the crash when a 5-col row was written to a 4-col range.
+  const maxCols = data.reduce((m, row) => Math.max(m, Array.isArray(row) ? row.length : 1), 4);
+
   const formattedData = data.map(row => {
-    if (row.length === 1) return [row[0], "", "", ""];
-    if (row.length === 2) return [row[0], row[1], "", ""];
-    return row;
+    const arr = Array.isArray(row) ? row.slice() : [row];
+    while (arr.length < maxCols) arr.push("");
+    return arr;
   });
 
-  sheet.getRange(1, 1, formattedData.length, 4).setValues(formattedData);
+  sheet.getRange(1, 1, formattedData.length, maxCols).setValues(formattedData);
   sheet.getRange("A1").setFontSize(14).setFontWeight("bold");
 
   this.autoResize(sheet);

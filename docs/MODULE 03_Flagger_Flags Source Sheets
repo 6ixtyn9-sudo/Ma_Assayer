@@ -46,14 +46,18 @@ const Flagger_ = {
     const sideResult = this.flagSheet(ss, Config_.sheets.side, sideEdges, leagueAssay, "side", teamAssay, matchupAssay);
     const totalsResult = this.flagSheet(ss, Config_.sheets.totals, totalsEdges, leagueAssay, "totals", teamAssay, matchupAssay);
 
+    // Guard against undefined/null results (fleet-only: Side and Totals sheets don't exist)
+    const totalFlagged = (sideResult?.flagged || 0) + (totalsResult?.flagged || 0);
+    const totalRows    = (sideResult?.total   || 0) + (totalsResult?.total   || 0);
+
     const summary = {
-      side: sideResult,
-      totals: totalsResult,
-      totalFlagged: (sideResult ? sideResult.flagged : 0) + (totalsResult ? totalsResult.flagged : 0),
-      totalRows: (sideResult ? sideResult.total : 0) + (totalsResult ? totalsResult.total : 0)
+      side:    sideResult,
+      totals:  totalsResult,
+      totalFlagged,
+      totalRows
     };
 
-    this.log.success(`Flagging complete: ${summary.totalFlagged}/${summary.totalRows} rows flagged`);
+    this.log.success(`Flagging complete: ${totalFlagged} rows flagged (${totalRows} total)`);
     Log_.sectionEnd("Applying Flags");
 
     return summary;
@@ -88,13 +92,14 @@ const Flagger_ = {
 
     const sheet = ss.getSheetByName(sheetName);
     if (!sheet) {
-      this.log.warn(`Sheet not found: ${sheetName}`);
-      return { success: false, error: "Sheet not found" };
+      // In fleet-only mode Side and Totals sheets do not exist — this is expected, not an error
+      this.log.info(`[fleet-only] Sheet not found: ${sheetName} — skipping flag pass`);
+      return { success: false, error: "Sheet not found", flagged: 0, total: 0 };
     }
 
     const data = sheet.getDataRange().getValues();
     if (data.length < 2) {
-      this.log.warn(`No data in sheet: ${sheetName}`);
+      this.log.info(`No data in sheet: ${sheetName} — skipping`);
       return { success: false, error: "No data", total: 0, flagged: 0 };
     }
 
