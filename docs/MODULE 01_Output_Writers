@@ -160,12 +160,31 @@ const Output_ = {
         .replace(/\s*\(\d+(?:\.\d+)?%\)\s*/g, '')
         .trim();
 
+      // Session 22g: derive Quarter and Direction from pick if missing from source sheet
+      let derivedQuarter = bet.quarter != null ? bet.quarter : '';
+      if (derivedQuarter === '' && typeof Parser_ !== 'undefined') {
+        const parsedQ = Parser_.parseQuarter(cleanedPick);
+        if (parsedQ != null) derivedQuarter = parsedQ;
+      }
+
+      let derivedDir = String(bet.direction || '').toUpperCase().trim();
+      if (!derivedDir && typeof Parser_ !== 'undefined') {
+        const parsedOU = Parser_.parseDirection(cleanedPick);
+        if (parsedOU) {
+          derivedDir = parsedOU.toUpperCase();
+        } else {
+          const parsedSide = Parser_.parseSide(cleanedPick, null);
+          if (parsedSide === 'H') derivedDir = 'HOME';
+          if (parsedSide === 'A') derivedDir = 'AWAY';
+        }
+      }
+
       // Derive backed team + opponent by bet type:
       //   Path 1: directional spread (SNIPER_MARGIN) — direction + home/away
       //   Path 2: BANKER / ROBBER — pick IS the team name directly
       //   Path 3: 1H_1X2 / FT_1X2 — pick may be HOME/AWAY/DRAW or a team name
       //   Path 4: OU / totals (SNIPER_OU, FT_O_U, SNIPER_HIGH_QTR) — no backed team
-      const direction = String(bet.direction || '').toUpperCase().trim();
+      const direction = derivedDir;
       const home      = String(bet.home      || '').trim();
       const away      = String(bet.away      || '').trim();
       const betType   = String(bet.type      || '').toUpperCase().trim();
@@ -232,25 +251,6 @@ const Output_ = {
       const line = String(bet.line || '').trim()
         || (String(cleanedPick).match(/\(([+-]?\d+(?:\.\d+)?)\)\s*$/)?.[1] ?? '') // (2.6) or (-2.1)
         || (String(cleanedPick).match(/([+-]\d+(?:\.\d+)?)\s*$/)?.[1] ?? '');    // +4.5 or -3.0 bare
-
-      // Session 22g: derive Quarter and Direction from pick if missing from source sheet
-      let derivedQuarter = bet.quarter != null ? bet.quarter : '';
-      if (derivedQuarter === '' && typeof Parser_ !== 'undefined') {
-        const parsedQ = Parser_.parseQuarter(cleanedPick);
-        if (parsedQ != null) derivedQuarter = parsedQ;
-      }
-
-      let derivedDir = String(bet.direction || '').toUpperCase().trim();
-      if (!derivedDir && typeof Parser_ !== 'undefined') {
-        const parsedOU = Parser_.parseDirection(cleanedPick);
-        if (parsedOU) {
-          derivedDir = parsedOU.toUpperCase();
-        } else {
-          const parsedSide = Parser_.parseSide(cleanedPick, null);
-          if (parsedSide === 'H') derivedDir = 'HOME';
-          if (parsedSide === 'A') derivedDir = 'AWAY';
-        }
-      }
 
       // Result / Outcome — SCHEMA NOTE:
       //   parseIntakeMarketSheets (fleet bets): bet.result = 1/0/-1/null (integer)
