@@ -885,6 +885,7 @@ writeSummary(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, logSum
 
   const sheet = this.getOrCreateSheet(ss, Config_.sheets.summary);
   sheet.clear();
+  sheet.clearFormats(); // prevent stale 0.00% format bleeding onto integer columns
 
   const combos = Object.values(leagueAssay || {});
   const allQuarterCombos = combos.filter(l => l?.quarter == null);
@@ -896,6 +897,53 @@ writeSummary(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, logSum
   const uniqueLeagues = new Set(allQuarterCombos.map(l => l.league).filter(Boolean)).size;
   const uniqueAllQuarterKeys = allQuarterCombos.length;
 
+  // ── Helper: format integer counts with commas ──
+  const fmt = n => (typeof n === 'number') ? n.toLocaleString('en-US') : String(n || 0);
+
+  // ── BY TYPE aggregation ──
+  const byTypeRows = (() => {
+    const byType = {};
+    const combosAll = Object.values(leagueAssay || {});
+    combosAll.filter(l => l?.quarter == null).forEach(l => {
+      const t = (l.typeKey || l.type || "ALL").toUpperCase() || "ALL";
+      if (!byType[t]) byType[t] = { combos: 0, decisive: 0, wins: 0, losses: 0 };
+      byType[t].combos++;
+      byType[t].decisive += l.decisive || 0;
+      byType[t].wins     += l.wins     || 0;
+      byType[t].losses   += l.losses   || 0;
+    });
+    return Object.entries(byType)
+      .sort((a, b) => b[1].decisive - a[1].decisive)
+      .map(([t, s]) => {
+        const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
+        return [t, fmt(s.combos), fmt(s.decisive), fmt(s.wins), fmt(s.losses), Stats_.pct(wr), Stats_.getGrade(wr, s.decisive)];
+      });
+  })();
+
+  // ── BY TIER aggregation ──
+  const byTierRows = (() => {
+    const byTier = {};
+    allQuarterCombos.forEach(l => {
+      const t = l.tier || "UNKNOWN";
+      if (!byTier[t]) byTier[t] = { combos: 0, decisive: 0, wins: 0, losses: 0 };
+      byTier[t].combos++;
+      byTier[t].decisive += l.decisive || 0;
+      byTier[t].wins     += l.wins     || 0;
+      byTier[t].losses   += l.losses   || 0;
+    });
+    const tierOrder = ["ELITE", "STRONG", "MEDIUM", "UNKNOWN"];
+    return Object.entries(byTier)
+      .sort((a, b) => {
+        const ai = tierOrder.indexOf(a[0]);
+        const bi = tierOrder.indexOf(b[0]);
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+      })
+      .map(([t, s]) => {
+        const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
+        return [t, fmt(s.combos), fmt(s.decisive), fmt(s.wins), fmt(s.losses), Stats_.pct(wr), Stats_.getGrade(wr, s.decisive)];
+      });
+  })();
+
   const data = [
     [`⚗️ MA ASSAYER SUMMARY — v${Config_.version}`],
     [`Generated: ${Utils_.formatDate(new Date(), "yyyy-MM-dd HH:mm:ss")}`],
@@ -904,59 +952,45 @@ writeSummary(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, logSum
     ["OVERALL PERFORMANCE"],
     [""],
     ["Metric", "Value"],
-    ["Total Bets Analyzed", globalStats?.total || 0],
-    ["Decisive Bets", globalStats?.decisive || 0],
-    ["Wins", globalStats?.wins || 0],
-    ["Losses", globalStats?.losses || 0],
-    ["Pushes", globalStats?.pushes || 0],
-    ["Win Rate", Stats_.pct(globalStats?.winRate || 0)],
+    ["Total Bets Analyzed", fmt(globalStats?.total)],
+    ["Decisive Bets",        fmt(globalStats?.decisive)],
+    ["Wins",                 fmt(globalStats?.wins)],
+    ["Losses",               fmt(globalStats?.losses)],
+    ["Pushes",               fmt(globalStats?.pushes)],
+    ["Win Rate",             Stats_.pct(globalStats?.winRate || 0)],
     ["Grade", `${Stats_.getGradeSymbol(globalStats?.winRate || 0)} ${Stats_.getGrade(globalStats?.winRate || 0, globalStats?.decisive || 0)}`],
     [""],
     ["═══════════════════════════════════════════════════════════"],
     ["BY TYPE (Fleet)"],
     [""],
-    ["Bet Type", "Combos", "Decisive", "Win Rate", "Grade"],
-    // Aggregate leagueAssay combos by typeKey for a fleet-level type breakdown
-    ...(() => {
-      const byType = {};
-      const combosAll = Object.values(leagueAssay || {});
-      combosAll.filter(l => l?.quarter == null).forEach(l => {
-        const t = (l.typeKey || l.type || "ALL").toUpperCase() || "ALL";
-        if (!byType[t]) byType[t] = { combos: 0, decisive: 0, wins: 0 };
-        byType[t].combos++;
-        byType[t].decisive += l.decisive || 0;
-        byType[t].wins     += l.wins     || 0;
-      });
-      return Object.entries(byType)
-        .sort((a,b) => b[1].decisive - a[1].decisive)
-        .map(([t, s]) => {
-          const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
-          return [t, s.combos, s.decisive, Stats_.pct(wr), Stats_.getGrade(wr, s.decisive)];
-        });
-    })(),
+    ["Bet Type", "Combos", "Decisive", "Wins", "Losses", "Win Rate", "Grade"],
+    ...byTypeRows,
+    [""],
+    ["═══════════════════════════════════════════════════════════"],
+    ["ACCURACY BY TIER"],
+    [""],
+    ["Tier", "Combos", "Decisive", "Wins", "Losses", "Win Rate", "Grade"],
+    ...byTierRows,
     [""],
     ["═══════════════════════════════════════════════════════════"],
     ["DISCOVERY SUMMARY"],
     [""],
-    ["Total Edges Discovered", Array.isArray(edges) ? edges.length : 0],
-    ["Gold/Platinum Edges", goldEdges.length],
-    ["Unique Leagues (All-Quarter)", uniqueLeagues],
-    ["All-Quarter Combos (League+Source+Gender+Tier)", uniqueAllQuarterKeys],
-    ["Gold/Platinum Combos (All-Quarter)", goldCombos.length],
-    ["Low-performing/Toxic Combos (All-Quarter)", toxicCombos.length],
+    ["Total Edges Discovered",                          fmt(Array.isArray(edges) ? edges.length : 0)],
+    ["Gold/Platinum Edges",                             fmt(goldEdges.length)],
+    ["Unique Leagues (All-Quarter)",                    fmt(uniqueLeagues)],
+    ["All-Quarter Combos (League+Source+Gender+Tier)",  fmt(uniqueAllQuarterKeys)],
+    ["Gold/Platinum Combos (All-Quarter)",              fmt(goldCombos.length)],
+    ["Low-performing/Toxic Combos (All-Quarter)",       fmt(toxicCombos.length)],
     [""],
     ["═══════════════════════════════════════════════════════════"],
     ["EXECUTION STATS"],
     [""],
-    ["Elapsed Time", `${logSummary?.elapsed || 0}s`],
-    ["Warnings", logSummary?.warnings || 0],
-    ["Errors", logSummary?.errors || 0],
-    ["Session ID", logSummary?.sessionId || "N/A"]
+    ["Elapsed Time",  `${logSummary?.elapsed || 0}s`],
+    ["Warnings",      fmt(logSummary?.warnings)],
+    ["Errors",        fmt(logSummary?.errors)],
+    ["Session ID",    logSummary?.sessionId || "N/A"]
   ];
 
-  // Determine the maximum number of columns across all rows in the data array.
-  // BY TYPE rows have 5 cols; most other rows have 1-2. Using a hardcoded 4
-  // caused the crash when a 5-col row was written to a 4-col range.
   const maxCols = data.reduce((m, row) => Math.max(m, Array.isArray(row) ? row.length : 1), 4);
 
   const formattedData = data.map(row => {
