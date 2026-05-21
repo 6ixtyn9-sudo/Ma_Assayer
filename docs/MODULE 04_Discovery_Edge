@@ -299,7 +299,7 @@ const Discovery_ = {
     if (!this.log) this.init();
     Log_.section("Discovering Edges");
 
-    this.log.info(`Discovery inputs: sideBets=${sideBets.length}, totalsBets=${totalsBets.length}, fleetBets=${fleetBets.length}`);
+    this.log.info(`Discovery inputs: fleetBets=${fleetBets.length}`);
 
     const discovered = [];
     const t = Config_.thresholds;
