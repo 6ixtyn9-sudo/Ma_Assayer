@@ -292,6 +292,15 @@ const Stats_ = {
     // v4.3.1: Always label aggregate rows "ALL", never blank
     const displayTypeKey = typeKey || "ALL";
 
+    // Session 22 fix: mirror team assay performance detection.
+    // Config lists alone (toxicLeagues=["UNKNOWN"], eliteLeagues=[]) left these columns blank.
+    // A league that is reliable AND grades CHARCOAL is performance-toxic;
+    // a league that is reliable AND grades GOLD/PLATINUM is performance-elite.
+    const isConfigToxicLeague = Array.isArray(Config_.toxicLeagues) ? Config_.toxicLeagues.includes(league) : false;
+    const isConfigEliteLeague = Array.isArray(Config_.eliteLeagues) ? Config_.eliteLeagues.includes(league) : false;
+    const isPerfToxicLeague   = reliability >= 1 && gradeInfo.grade === 'CHARCOAL';
+    const isPerfEliteLeague   = reliability >= 1 && (gradeInfo.grade === 'GOLD' || gradeInfo.grade === 'PLATINUM');
+
     return {
       league: league,
       source: source,
@@ -324,8 +333,8 @@ const Stats_ = {
       isReliable: reliability >= 1,
 
       isWomen: gender === "W",
-      isToxic: Array.isArray(Config_.toxicLeagues) ? Config_.toxicLeagues.includes(league) : false,
-      isElite: Array.isArray(Config_.eliteLeagues) ? Config_.eliteLeagues.includes(league) : false,
+      isToxic: isConfigToxicLeague || isPerfToxicLeague,
+      isElite: isConfigEliteLeague || isPerfEliteLeague,
 
       quarters: [].concat(new Set(sliceBets.map(b => b.quarter).filter(q => q != null))).sort((a, b) => a - b),
       dateRange: this.getDateRange(sliceBets)
