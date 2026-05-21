@@ -101,7 +101,7 @@ const Main_ = {
   } catch (err) {
     Log_.error(`CRITICAL FAILURE: ${err.message}`, err.stack);
     Log_.writeToSheet(ss);
-    SpreadsheetApp.getUi().alert(`Error: ${err.message}`);
+    try { SpreadsheetApp.getUi().alert(`Error: ${err.message}`); } catch(_) {}
   }
 },
 };
