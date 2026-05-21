@@ -114,6 +114,10 @@ const Parser_ = {
 
     const str = String(val).toUpperCase().trim();
 
+    // Explicitly reject Halves — they are not Quarters!
+    if (str.includes("1H") || str.includes("1ST HALF") || str.includes("FIRST HALF") || str.includes("HT") || str.includes("HALF TIME")) return null;
+    if (str.includes("2H") || str.includes("2ND HALF") || str.includes("SECOND HALF")) return null;
+
     const qMatch = str.match(/Q\s*([1-4])/);
     if (qMatch) return parseInt(qMatch[1], 10);
 
@@ -123,13 +127,12 @@ const Parser_ = {
     const pMatch = str.match(/P\s*([1-3])/);
     if (pMatch) return parseInt(pMatch[1], 10);
 
-    if (str.includes("1H") || str.includes("FIRST") || str.includes("1ST HALF")) return 1;
-    if (str.includes("2H") || str.includes("SECOND") || str.includes("2ND HALF")) return 3;
+    if (str.includes("1ST Q") || str.includes("FIRST Q")) return 1;
+    if (str.includes("2ND Q") || str.includes("SECOND Q")) return 2;
+    if (str.includes("3RD Q") || str.includes("THIRD Q")) return 3;
+    if (str.includes("4TH Q") || str.includes("FOURTH Q")) return 4;
 
     if (str.includes("FULL") || str.includes("GAME") || str.includes("FG")) return 0;
-
-    const num = parseInt(str, 10);
-    if (!isNaN(num) && num >= 0 && num <= 4) return num;
 
     return null;
   },
