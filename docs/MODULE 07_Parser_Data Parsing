@@ -233,6 +233,8 @@ const Parser_ = {
 
     if (s === "O" || s === "OVER" || s.startsWith("OV") || s.includes("OVER")) return "Over";
     if (s === "U" || s === "UNDER" || s.startsWith("UN") || s.includes("UNDER")) return "Under";
+    if (s === "H" || s === "HOME" || s.includes("HOME")) return "HOME";
+    if (s === "A" || s === "AWAY" || s.includes("AWAY")) return "AWAY";
 
     return null;
   },
@@ -1252,11 +1254,10 @@ const Parser_ = {
           date:            this.getValue(row, resolved, 'date'),
           time:            this.getValue(row, resolved, 'time'),
           pick:            this.getValue(row, resolved, 'pick'),
-          line:            this.getValue(row, resolved, 'line'),
+          line:            this.parseLine(this.getValue(row, resolved, 'line')),
           direction:       this.parseDirection(this.getValue(row, resolved, 'direction')),
-          quarter:         null,
+          quarter:         this.parseQuarter(this.getValue(row, resolved, 'quarter')),
           confidence:      this.parseConfidence(this.getValue(row, resolved, 'confidence')),
-          confBucket:      null,   // filled below
           odds:            this.parseOdds(this.getValue(row, resolved, 'odds')),
           units:           this.getValue(row, resolved, 'units'),
           ev:              this.getValue(row, resolved, 'ev'),

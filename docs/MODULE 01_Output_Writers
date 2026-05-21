@@ -233,6 +233,25 @@ const Output_ = {
         || (String(cleanedPick).match(/\(([+-]?\d+(?:\.\d+)?)\)\s*$/)?.[1] ?? '') // (2.6) or (-2.1)
         || (String(cleanedPick).match(/([+-]\d+(?:\.\d+)?)\s*$/)?.[1] ?? '');    // +4.5 or -3.0 bare
 
+      // Session 22g: derive Quarter and Direction from pick if missing from source sheet
+      let derivedQuarter = bet.quarter != null ? bet.quarter : '';
+      if (derivedQuarter === '' && typeof Parser_ !== 'undefined') {
+        const parsedQ = Parser_.parseQuarter(cleanedPick);
+        if (parsedQ != null) derivedQuarter = parsedQ;
+      }
+
+      let derivedDir = String(bet.direction || '').toUpperCase().trim();
+      if (!derivedDir && typeof Parser_ !== 'undefined') {
+        const parsedOU = Parser_.parseDirection(cleanedPick);
+        if (parsedOU) {
+          derivedDir = parsedOU.toUpperCase();
+        } else {
+          const parsedSide = Parser_.parseSide(cleanedPick, null);
+          if (parsedSide === 'H') derivedDir = 'HOME';
+          if (parsedSide === 'A') derivedDir = 'AWAY';
+        }
+      }
+
       // Result / Outcome — SCHEMA NOTE:
       //   parseIntakeMarketSheets (fleet bets): bet.result = 1/0/-1/null (integer)
       //   parseSideSheet:                       bet.result = 1/0/-1/null (integer)
@@ -306,8 +325,8 @@ const Output_ = {
         matchup,                                                   // Col 5:  Matchup
         cleanedPick,                                               // Col 6:  Pick (cleaned)
         bet.type           || '',                                  // Col 7:  Type
-        bet.quarter        != null ? bet.quarter : '',             // Col 8:  Quarter    (Session 22 — was missing)
-        bet.direction      || '',                                  // Col 9:  Direction  (Session 22 — was missing)
+        derivedQuarter,                                            // Col 8:  Quarter
+        derivedDir,                                                // Col 9:  Direction
         bet.confidence     || '',                                  // Col 10: Confidence
         confBucket,                                                // Col 11: Conf Bucket
         bestGrade,                                                 // Col 12: Grade
