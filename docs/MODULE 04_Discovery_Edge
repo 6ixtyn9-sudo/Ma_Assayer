@@ -347,6 +347,14 @@ const Discovery_ = {
       this.log.info(`Fleet type distribution: ${JSON.stringify(fleetTypeCounts)}`);
       this.log.info(`Fleet types >= ${t.minN} samples: ${fleetTypes.join(', ') || 'none'}`);
 
+      // ----- Step 1: typeKey-only scan (global baseline) -----
+      // Emits type-only edges (criteria: { type: 'BANKER' }) without cfgKey dependencies.
+      const fleetBaseline = Stats_.calcBasic(fleetBets);
+      discovered.push(...this.scanAttribute(
+        fleetBets, 'Fleet', 'typeKey', fleetTypes,
+        b => b.typeKey, fleetBaseline
+      ));
+
       for (const typ of fleetTypes) {
         if (isApproachingTimeout()) break;
 
