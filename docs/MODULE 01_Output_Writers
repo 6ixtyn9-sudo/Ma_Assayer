@@ -179,7 +179,18 @@ const Output_ = {
       } else if (betType === 'BANKER' || betType === 'ROBBER') {
         // Path 2: pick is the team name — not a spread string
         const isSpreadPick = /^Q\d:|[+-]\d/.test(cleanedPick);
-        if (!isSpreadPick && cleanedPick) backedTeam = cleanedPick;
+        if (!isSpreadPick && cleanedPick) {
+          backedTeam = cleanedPick;
+          // Session 22c fix: derive opponent for BANKER/ROBBER.
+          // The pick is already the bare team name, so fuzzy-match directly against home/away.
+          if (home && away) {
+            const tU = cleanedPick.toUpperCase();
+            const hU = home.toUpperCase();
+            const aU = away.toUpperCase();
+            if (hU.includes(tU) || tU.includes(hU)) { opponent = away; }
+            else if (aU.includes(tU) || tU.includes(aU)) { opponent = home; }
+          }
+        }
       } else if (betType === '1H_1X2' || betType === 'FT_1X2' || betType === 'FIRST_HALF_1X2') {
         // Path 3: pick may be HOME/AWAY/DRAW label or a team name
         const pickUp = cleanedPick.toUpperCase();
