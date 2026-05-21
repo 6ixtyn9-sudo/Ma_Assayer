@@ -186,11 +186,27 @@ const Output_ = {
         if      (pickUp === 'HOME' && home)  { backedTeam = home; opponent = away; }
         else if (pickUp === 'AWAY' && away)  { backedTeam = away; opponent = home; }
         else if (pickUp === 'DRAW')          { backedTeam = 'Draw'; }
-        // Session 22 fix: removed !/[+-]\d/ guard — that guard belongs in Path 2 (BANKER/ROBBER)
-        // where the pick can be a raw spread string. For 1H_1X2 the format is always
-        // "1H: TeamName (spread)", so a negative spread like (-2.1) should not block
-        // team extraction. Matches existing behaviour for positive-spread picks.
-        else if (cleanedPick) { backedTeam = cleanedPick; }
+        else if (cleanedPick) {
+          backedTeam = cleanedPick;
+          // Session 22b fix: derive opponent from home/away when pick encodes the team name.
+          // Strip quarter prefix ("1H: ", "FT: ") and trailing spread notation ("(2.6)", "(-2.1)")
+          // to isolate the team name, then fuzzy-match against home/away.
+          if (home && away) {
+            const teamName = cleanedPick
+              .replace(/^(?:1H|2H|FT|Q\d)\s*:\s*/i, '')
+              .replace(/\s*\([+-]?\d+(?:\.\d+)?\)\s*$/, '')
+              .replace(/\s*[+-]\d+(?:\.\d+)?\s*$/, '')
+              .trim()
+              .toUpperCase();
+            const hU = home.toUpperCase();
+            const aU = away.toUpperCase();
+            if (teamName && (hU.includes(teamName) || teamName.includes(hU))) {
+              opponent = away;
+            } else if (teamName && (aU.includes(teamName) || teamName.includes(aU))) {
+              opponent = home;
+            }
+          }
+        }
       }
       // Path 4: OU/totals — backedTeam stays blank (correct)
 
