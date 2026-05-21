@@ -399,7 +399,7 @@ const Stats_ = {
             tk && tk !== "null" && tk !== "undefined"
           );
 
-          if (distinctTypeKeys.length >= 2 || source === "Other") {
+          if (distinctTypeKeys.length >= 2 || source === "Other" || source === "Fleet") {
             for (const tk of distinctTypeKeys) {
               const tkBets = byTypeKey[tk];
               const minNReq = source === "Other" ? 1 : Config_.thresholds.minN;
