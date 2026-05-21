@@ -371,6 +371,12 @@ const Flagger_ = {
           // Previously status stayed "—", producing truncated "CHARCOAL—" labels in MA_Vault.
           status = `⛔ ${leagueInfo.source || betSource} ${leagueInfo.gender || gender} ${leagueInfo.tier || tier} ${qLabel}`;
         }
+      } else {
+        // Session 22 fix: leagueInfo is null — this league/source combo has no assay entry
+        // (too few bets to compute reliable stats, e.g. NBN, BLN, LPB, QBL, ROW).
+        // None of the matchup/team/leagueInfo branches fired, so status would stay "—".
+        // Emit a descriptive fallback so the vault never shows a bare dash.
+        status = `⚪ ${betSource || 'Fleet'} ${gender} ${tier || 'UNKNOWN'} (No assay)`;
       }
     }
 

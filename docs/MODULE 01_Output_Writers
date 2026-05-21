@@ -186,7 +186,11 @@ const Output_ = {
         if      (pickUp === 'HOME' && home)  { backedTeam = home; opponent = away; }
         else if (pickUp === 'AWAY' && away)  { backedTeam = away; opponent = home; }
         else if (pickUp === 'DRAW')          { backedTeam = 'Draw'; }
-        else if (cleanedPick && !/[+-]\d/.test(cleanedPick)) { backedTeam = cleanedPick; }
+        // Session 22 fix: removed !/[+-]\d/ guard — that guard belongs in Path 2 (BANKER/ROBBER)
+        // where the pick can be a raw spread string. For 1H_1X2 the format is always
+        // "1H: TeamName (spread)", so a negative spread like (-2.1) should not block
+        // team extraction. Matches existing behaviour for positive-spread picks.
+        else if (cleanedPick) { backedTeam = cleanedPick; }
       }
       // Path 4: OU/totals — backedTeam stays blank (correct)
 
