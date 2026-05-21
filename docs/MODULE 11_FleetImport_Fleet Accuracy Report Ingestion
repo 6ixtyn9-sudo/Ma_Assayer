@@ -472,17 +472,50 @@ const FleetImport_ = {
       return null;
     }
 
+    const pick = get('pick');
+    let quarter = get('quarter');
+    let direction = get('direction');
+    let line = get('line');
+
+    // Fallback extraction from pick string if missing in source
+    if ((!quarter || !direction || !line) && typeof Parser_ !== 'undefined' && pick) {
+      const cleanedPick = String(pick)
+        .replace(/\s*[★●○◆▲▼]\s*\(\d+(?:\.\d+)?%\)\s*[★●○◆▲▼]?\s*/g, '')
+        .replace(/\s*\(\d+(?:\.\d+)?%\)\s*/g, '')
+        .trim();
+        
+      if (!quarter) {
+        const parsedQ = Parser_.parseQuarter(cleanedPick);
+        if (parsedQ != null) quarter = parsedQ;
+      }
+      if (!direction) {
+        const parsedOU = Parser_.parseDirection(cleanedPick);
+        if (parsedOU) {
+          direction = parsedOU.toUpperCase();
+        } else {
+          const parsedSide = Parser_.parseSide(cleanedPick, null);
+          if (parsedSide === 'H') direction = 'HOME';
+          if (parsedSide === 'A') direction = 'AWAY';
+        }
+      }
+      if (!line) {
+        const parsedLineMatch = String(cleanedPick).match(/\(([+-]?\d+(?:\.\d+)?)\)\s*$/) 
+                             || String(cleanedPick).match(/([+-]\d+(?:\.\d+)?)\s*$/);
+        if (parsedLineMatch) line = parsedLineMatch[1];
+      }
+    }
+
     return {
       satellite_id:   sat.id,
       satellite_name: sat.name,
       league:         get('league'),
       date:           this._normalizeDate_(get('date')),
       match:          get('match'),
-      pick:           get('pick'),
+      pick:           pick,
       type:           canonType,
-      quarter:        get('quarter'),
-      direction:      get('direction'),
-      line:           get('line'),
+      quarter:        quarter,
+      direction:      direction,
+      line:           line,
       confidence:     this._normalizeConfidence_(get('confidence')),
       tier:           get('tier'),
       odds:           get('odds'),
