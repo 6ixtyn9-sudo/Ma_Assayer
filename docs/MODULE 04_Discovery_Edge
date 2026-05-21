@@ -351,7 +351,7 @@ const Discovery_ = {
       // Emits type-only edges (criteria: { type: 'BANKER' }) without cfgKey dependencies.
       const fleetBaseline = Stats_.calcBasic(fleetBets);
       discovered.push(...this.scanAttribute(
-        fleetBets, 'Fleet', 'typeKey', fleetTypes,
+        fleetBets, 'Fleet', 'type', fleetTypes,
         b => b.typeKey, fleetBaseline
       ));
 
@@ -441,8 +441,7 @@ const Discovery_ = {
       e.lift <= maxLift &&
       e.lowerBound >= wilsonGate &&                                        // ◆ PATCH
       (e.source !== 'Totals' || (e.criteria && e.criteria.typeKey)) &&    // Totals gate
-      (e.source !== 'Fleet'  || (e.criteria && e.criteria.type &&         // Fleet gate
-                                  e.criteria.cfgKey && e.criteria.cfgBucket))
+      (e.source !== 'Fleet'  || (e.criteria && e.criteria.type))          // Fleet gate
     );
 
     // Deduplicate by ID (keep largest sample)
