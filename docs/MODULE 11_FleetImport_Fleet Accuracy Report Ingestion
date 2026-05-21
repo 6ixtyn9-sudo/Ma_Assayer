@@ -476,9 +476,10 @@ const FleetImport_ = {
     let quarter = get('quarter');
     let direction = get('direction');
     let line = get('line');
+    let odds = get('odds');
 
     // Fallback extraction from pick string if missing in source
-    if ((!quarter || !direction || !line) && typeof Parser_ !== 'undefined' && pick) {
+    if (typeof Parser_ !== 'undefined' && pick) {
       const cleanedPick = String(pick)
         .replace(/\s*[★●○◆▲▼]\s*\(\d+(?:\.\d+)?%\)\s*[★●○◆▲▼]?\s*/g, '')
         .replace(/\s*\(\d+(?:\.\d+)?%\)\s*/g, '')
@@ -513,10 +514,18 @@ const FleetImport_ = {
           }
         }
       }
-      if (!line) {
-        const parsedLineMatch = String(cleanedPick).match(/\(([+-]?\d+(?:\.\d+)?)\)\s*$/) 
-                             || String(cleanedPick).match(/([+-]\d+(?:\.\d+)?)\s*$/);
-        if (parsedLineMatch) line = parsedLineMatch[1];
+      
+      const parsedLineMatch = String(cleanedPick).match(/\(([+-]?\d+(?:\.\d+)?)\)\s*$/) 
+                           || String(cleanedPick).match(/([+-]\d+(?:\.\d+)?)\s*$/);
+      if (parsedLineMatch) {
+        const val = parsedLineMatch[1];
+        const isMoneyline = canonType.includes('1X2') || canonType === 'BANKER' || canonType === 'ROBBER';
+        
+        if (isMoneyline) {
+          if (!odds || odds === '-') odds = val;
+        } else {
+          if (!line || line === '-') line = val;
+        }
       }
     }
 
