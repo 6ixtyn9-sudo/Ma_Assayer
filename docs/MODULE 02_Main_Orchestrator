@@ -96,12 +96,10 @@ const Main_ = {
     
     // 10. Finish
     Log_.writeToSheet(ss);
-    try { SpreadsheetApp.getUi().alert("Assay Complete! Check the 'MA_Vault' tab."); } catch(_) {}
     
   } catch (err) {
     Log_.error(`CRITICAL FAILURE: ${err.message}`, err.stack);
     Log_.writeToSheet(ss);
-    try { SpreadsheetApp.getUi().alert(`Error: ${err.message}`); } catch(_) {}
   }
 },
 };
