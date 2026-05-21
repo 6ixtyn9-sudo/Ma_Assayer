@@ -100,6 +100,8 @@ const Output_ = {
       "Matchup",
       "Pick",
       "Type",
+      "Quarter",
+      "Direction",
       "Confidence",
       "Conf Bucket",
       "Grade",
@@ -224,10 +226,12 @@ const Output_ = {
       // Matchup: match field from schema, then construct from home/away
       const matchup = bet.match || (home && away ? `${home} vs ${away}` : '');
 
-      // Spread / Line: bet.line from schema first, then extract from cleaned pick
-      // (many satellites encode spread inside the pick string: "Q1: H +4.5")
+      // Spread / Line: bet.line from schema first, then extract from cleaned pick.
+      // Session 22 fix: also handles (X.X) and (-X.X) parens format used in 1H_1X2 picks
+      // e.g. "1H: Kretinga (2.6)" → "2.6", "1H: Suduva-Mantinga (-2.1)" → "-2.1"
       const line = String(bet.line || '').trim()
-        || (String(cleanedPick).match(/([+-]\d+(?:\.\d+)?)\s*$/)?.[1] ?? '');
+        || (String(cleanedPick).match(/\(([+-]?\d+(?:\.\d+)?)\)\s*$/)?.[1] ?? '') // (2.6) or (-2.1)
+        || (String(cleanedPick).match(/([+-]\d+(?:\.\d+)?)\s*$/)?.[1] ?? '');    // +4.5 or -3.0 bare
 
       // Result / Outcome — SCHEMA NOTE:
       //   parseIntakeMarketSheets (fleet bets): bet.result = 1/0/-1/null (integer)
@@ -296,20 +300,22 @@ const Output_ = {
 
       return [
         i + 1,                                                     // Col 1:  Bet Index
-        bet.satellite_name || bet.source || '',                    // Col 2:  Source (satellite_name for MODULE 11 path; source='Fleet' for intake path)
+        bet.satellite_name || bet.source || '',                    // Col 2:  Source
         bet.league         || '',                                  // Col 3:  League
         bet.date           || '',                                  // Col 4:  Date
         matchup,                                                   // Col 5:  Matchup
         cleanedPick,                                               // Col 6:  Pick (cleaned)
         bet.type           || '',                                  // Col 7:  Type
-        bet.confidence     || '',                                  // Col 8:  Confidence
-        confBucket,                                                // Col 9:  Conf Bucket
-        bestGrade,                                                 // Col 10: Grade
-        status,                                                    // Col 11: Purity Status
-        backedTeam,                                                // Col 12: Backed Team
-        opponent,                                                  // Col 13: Opponent
-        line,                                                      // Col 14: Spread / Line
-        finalResult,                                               // Col 15: Result / Outcome
+        bet.quarter        != null ? bet.quarter : '',             // Col 8:  Quarter    (Session 22 — was missing)
+        bet.direction      || '',                                  // Col 9:  Direction  (Session 22 — was missing)
+        bet.confidence     || '',                                  // Col 10: Confidence
+        confBucket,                                                // Col 11: Conf Bucket
+        bestGrade,                                                 // Col 12: Grade
+        status,                                                    // Col 13: Purity Status
+        backedTeam,                                                // Col 14: Backed Team
+        opponent,                                                  // Col 15: Opponent
+        line,                                                      // Col 16: Spread / Line
+        finalResult,                                               // Col 17: Result / Outcome
       ];
     });
 
