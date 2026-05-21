@@ -38,29 +38,41 @@ const Flagger_ = {
     if (!this.log) this.init();
     Log_.section("Applying Flags");
 
-    const sideEdges = edges.filter(e => e.source === "Side");
-    const totalsEdges = edges.filter(e => e.source === "Totals");
+    this.log.info(`Processing ${edges.length} edges across all intake sheets`);
 
-    this.log.info(`Processing ${sideEdges.length} side edges, ${totalsEdges.length} totals edges`);
-
-    const sideResult = this.flagSheet(ss, Config_.sheets.side, sideEdges, leagueAssay, "side", teamAssay, matchupAssay);
-    const totalsResult = this.flagSheet(ss, Config_.sheets.totals, totalsEdges, leagueAssay, "totals", teamAssay, matchupAssay);
-
-    // Guard against undefined/null results (fleet-only: Side and Totals sheets don't exist)
-    const totalFlagged = (sideResult?.flagged || 0) + (totalsResult?.flagged || 0);
-    const totalRows    = (sideResult?.total   || 0) + (totalsResult?.total   || 0);
-
-    const summary = {
-      side:    sideResult,
-      totals:  totalsResult,
-      totalFlagged,
-      totalRows
-    };
+    // Dynamically flag all matching Fleet sheets using merged aliases
+    const mergedAliases = { ...Config_.sideColumnAliases, ...Config_.totalsColumnAliases };
+    const allSheets = ss.getSheets();
+    
+    let totalFlagged = 0;
+    let totalRows = 0;
+    
+    for (const sheet of allSheets) {
+      const name = sheet.getName();
+      // Only process active sheets managed by the Assayer (Fleet / Intake)
+      if (name.match(/^[A-Z0-9][A-Z0-9_]{2,}$/) && !this.isProtectedSheet(name)) {
+        const result = this.flagSheet(ss, name, edges, leagueAssay, name, teamAssay, matchupAssay);
+        if (result) {
+          totalFlagged += result.flagged || 0;
+          totalRows += result.total || 0;
+        }
+      }
+    }
 
     this.log.success(`Flagging complete: ${totalFlagged} rows flagged (${totalRows} total)`);
     Log_.sectionEnd("Applying Flags");
+    
+    return { totalFlagged, totalRows };
+  },
 
-    return summary;
+  isProtectedSheet(name) {
+    const protectedNames = [
+      'ASSAYER_EDGES', 'ASSAYER_LEAGUE_PURITY',
+      'MA_LOGS', 'MA_DISCOVERY', 'MA_VAULT',
+      'MA_SUMMARY', 'MA_CONFIG', 'MA_CHARTS',
+      'MA_IMPORT_REPORT'
+    ];
+    return protectedNames.includes(name);
   },
 
   _buildEdgeIndex(edges) {
@@ -499,15 +511,6 @@ const Flagger_ = {
       var expected = criteriaEntries[i][1];
       var actual = bet[key];
 
-      // v4.3.0: auto-derive typeKey if missing on the bet
-      if (key === "typeKey" && (actual === undefined || actual === null)) {
-        if (typeof Discovery_ !== "undefined" && Discovery_._getTotalsTypeKey) {
-          actual = Discovery_._getTotalsTypeKey(bet);
-        } else {
-          actual = this._getTotalsTypeKeyFallback(bet);
-        }
-      }
-
       if (actual === undefined || actual === null) return false;
       if (norm(actual) !== norm(expected)) return false;
     }
@@ -572,9 +575,8 @@ const Flagger_ = {
       ? Parser_.getConfBucket(conf)
       : self._getConfBucketFallback(conf);
 
-    // v4.3.0: include source so evaluateRow can derive betSource
     const base = {
-      source: type === "side" ? "Side" : "Totals",
+      source: "Fleet",
       league: league,
       isWomen: isWomen,
       confBucket: confBucket,
@@ -582,84 +584,44 @@ const Flagger_ = {
       quarter: quarter
     };
 
-    if (type === "side") {
-      const spread = (typeof Parser_ !== "undefined" && Parser_.parseSpread)
-        ? Parser_.parseSpread(pick)
-        : self._parseSpreadFallback(pick);
+    // Generic extractions for matchup and line buckets
+    const home = String(getValue("home", "") || "");
+    const away = String(getValue("away", "") || "");
+    const spreadRaw = getValue("spread");
+    const lineRaw = getValue("line");
+    const dirRaw = getValue("direction");
+    const typeRaw = getValue("type", "");
+    
+    // Spread
+    const pickSpread = (typeof Parser_ !== "undefined" && Parser_.parseSpread) ? Parser_.parseSpread(pick) : null;
+    const colSpread = typeof Utils_ !== "undefined" ? Utils_.toNumber(spreadRaw, null) : null;
+    base.spread = pickSpread !== null ? pickSpread : colSpread;
+    base.spreadBucket = (typeof Parser_ !== "undefined" && Parser_.getSpreadBucket) ? Parser_.getSpreadBucket(base.spread) : null;
 
-      const side = (typeof Parser_ !== "undefined" && Parser_.parseSide)
-        ? Parser_.parseSide(pick, getValue("side"))
-        : self._parseSideFallback(pick, getValue("side"));
+    // Line & Direction
+    base.line = (typeof Parser_ !== "undefined" && Parser_.parseLine) ? Parser_.parseLine(lineRaw) : null;
+    base.lineBucket = (typeof Parser_ !== "undefined" && Parser_.getLineBucket) ? Parser_.getLineBucket(base.line) : null;
+    base.direction = (typeof Parser_ !== "undefined" && Parser_.parseDirection) ? Parser_.parseDirection(dirRaw) : null;
 
-      const spreadBucket = (typeof Parser_ !== "undefined" && Parser_.getSpreadBucket)
-        ? Parser_.getSpreadBucket(spread)
-        : self._getSpreadBucketFallback(spread);
+    // Teams
+    const pickSide = (typeof Parser_ !== "undefined" && Parser_.parseSide) ? Parser_.parseSide(pick) : null;
+    const backedTeam = pickSide === "HOME" ? home : (pickSide === "AWAY" ? away : null);
+    const opponentTeam = pickSide === "HOME" ? away : (pickSide === "AWAY" ? home : null);
+    base.backedTeam = backedTeam;
+    base.opponentTeam = opponentTeam;
+    base.matchupKey = (backedTeam && opponentTeam) ? `${backedTeam}__VS__${opponentTeam}` : null;
 
-      base.side = side;
-      base.spreadBucket = spreadBucket;
-
-      const norm = (s) => {
-        if (typeof Parser_ !== "undefined" && Parser_.normalizeTeamName) {
-          return Parser_.normalizeTeamName(s);
+    // TypeKey
+    base.type = String(typeRaw || "");
+    base.typeKey = String(typeRaw || "UNKNOWN");
+    
+    // Config Profile properties (v5.0.0)
+    for (const key in resolved) {
+      if (typeof key === "string" && key.startsWith("CFG_")) {
+        const val = getValue(key);
+        if (val !== "" && val !== undefined) {
+          base[key] = val;
         }
-        return s ? String(s).trim().toUpperCase() : null;
-      };
-
-      let home = norm(getValue("home", ""));
-      let away = norm(getValue("away", ""));
-
-      if ((!home || !away) && (typeof Parser_ !== "undefined" && Parser_.extractTeamsFromMatch)) {
-        const parsed = Parser_.extractTeamsFromMatch(match);
-        home = home || parsed.home;
-        away = away || parsed.away;
-      }
-
-      let backedTeam = null;
-      if (typeof Parser_ !== "undefined" && Parser_.deriveBackedTeam) {
-        backedTeam = Parser_.deriveBackedTeam({ side: side, home: home, away: away, pick: pick, match: match });
-      } else {
-        backedTeam = (side === "H") ? home : ((side === "A") ? away : null);
-      }
-
-      let opponentTeam = null;
-      if (backedTeam && home && away) {
-        opponentTeam = (backedTeam === home) ? away : ((backedTeam === away) ? home : null);
-      }
-
-      const matchupKey = (backedTeam && opponentTeam) ? `${backedTeam}__VS__${opponentTeam}` : null;
-
-      base.backedTeam = backedTeam || null;
-      base.opponentTeam = opponentTeam || null;
-      base.matchupKey = matchupKey || null;
-
-    } else {
-      // totals
-      const lineRaw = getValue("line");
-      const line = (typeof Parser_ !== "undefined" && Parser_.parseLine)
-        ? Parser_.parseLine(lineRaw)
-        : self._parseLineFallback(lineRaw);
-
-      const direction = (typeof Parser_ !== "undefined" && Parser_.parseDirection)
-        ? Parser_.parseDirection(getValue("direction"))
-        : self._parseDirectionFallback(getValue("direction"));
-
-      const lineBucket = (typeof Parser_ !== "undefined" && Parser_.getLineBucket)
-        ? Parser_.getLineBucket(line)
-        : self._getLineBucketFallback(line);
-
-      base.direction = direction;
-      base.lineBucket = lineBucket;
-
-      // v4.3.0: read raw type and derive canonical typeKey
-      const typeRaw = getValue("type", "");
-      base.type = String(typeRaw || "");
-
-      if (typeof Discovery_ !== "undefined" && Discovery_._getTotalsTypeKey) {
-        base.typeKey = Discovery_._getTotalsTypeKey(base);
-      } else if (typeof Parser_ !== "undefined" && Parser_._deriveTotalsTypeKey) {
-        base.typeKey = Parser_._deriveTotalsTypeKey(base);
-      } else {
-        base.typeKey = self._getTotalsTypeKeyFallback(base);
       }
     }
 

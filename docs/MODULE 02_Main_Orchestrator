@@ -40,23 +40,19 @@ const Main_ = {
   
   try {
     // 2. Parse Data
-    const sideData = Parser_.parseSideSheet(ss);
-    const totalsData = Parser_.parseTotalsSheet(ss);
-    const intakeData = Parser_.parseIntakeMarketSheets(ss);
+    const fleetParse = Parser_.parseIntakeMarketSheets(ss);
     
-    const allBets = [...sideData.bets, ...totalsData.bets, ...(intakeData ? intakeData.bets : [])];
-    
-    if (allBets.length === 0) {
-      Log_.error("No valid bets found across any sheets (Side, Totals, or Intake).");
+    if (!fleetParse || fleetParse.bets.length === 0) {
+      Log_.error("No valid bets found across any sheets. Terminating assay.");
       Log_.writeToSheet(ss);
       return;
     }
     
+    const allBets = [...fleetParse.bets];
+    
     // 3. Statistical Analysis
     Log_.section("Running Statistics");
     const globalStats = Stats_.calcBasic(allBets);
-    const sideStats = Stats_.calcBasic(sideData.bets);
-    const totalsStats = Stats_.calcBasic(totalsData.bets);
     Logger.log("[ASSAY] Bet counts — total: " + allBets.length +
       ", decisive (graded/resolved): " + (globalStats.decisive || 0) +
       ", pending (no outcome): " + (allBets.length - (globalStats.decisive || 0)));
@@ -71,14 +67,14 @@ const Main_ = {
     const matchupAssay = Stats_.assayMatchups(allBets, globalStats);
     
     // 5. Edge Discovery (Using patched Discovery_)
-    const edges = Discovery_.discoverAll(sideData.bets, totalsData.bets, intakeData ? intakeData.bets : [], globalStats);
+    const edges = Discovery_.discoverAll(allBets, globalStats);
     
     // 6. Exclusion Analysis
     const exclusionImpact = Stats_.calcExclusionImpact(allBets, globalStats);
     
     // 7. Write Outputs
     Output_.writeVaultFlat(ss, allBets, leagueAssay, teamAssay, matchupAssay, edges);
-    Output_.writeVaultDashboard(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay, allBets.length);
+    Output_.writeVaultDashboard(ss, globalStats, leagueAssay, edges, teamAssay, matchupAssay, allBets.length);
     Output_.writeLeagueAssay(ss, leagueAssay, globalStats);
     Output_.writeDiscoveredEdges(ss, edges, globalStats);
     Output_.writeExclusionImpact(ss, exclusionImpact, globalStats);
@@ -96,7 +92,7 @@ const Main_ = {
     
     // 9. Generate Summary
     const logSummary = Log_.summary();
-    Output_.writeSummary(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, logSummary);
+    Output_.writeSummary(ss, globalStats, leagueAssay, edges, logSummary);
     
     // 10. Finish
     Log_.writeToSheet(ss);
@@ -108,44 +104,6 @@ const Main_ = {
     SpreadsheetApp.getUi().alert(`Error: ${err.message}`);
   }
 },
-  
-  /**
-   * Run just the flagger (useful if manual edits made to edges)
-   */
-   runFlaggerOnly() {
-   const ss = SpreadsheetApp.getActiveSpreadsheet();
-   Log_.init();
-  
-   try {
-     const sideData = Parser_.parseSideSheet(ss);
-     const totalsData = Parser_.parseTotalsSheet(ss);
-     const intakeData = Parser_.parseIntakeMarketSheets(ss);
-     const allBets = [...sideData.bets, ...totalsData.bets, ...(intakeData ? intakeData.bets : [])];
-    
-     // Re-run minimal stats needed for flagging
-     const globalStats = Stats_.calcBasic(allBets);
-     const leagueAssay = Stats_.assayLeagues(allBets, globalStats);
-
-     // PATCH: team + matchup assays for flagger-only mode
-     const teamAssay = Stats_.assayTeams(allBets, globalStats);
-     const matchupAssay = Stats_.assayMatchups(allBets, globalStats);
-
-     const edges = Discovery_.discoverAll(sideData.bets, totalsData.bets, intakeData ? intakeData.bets : [], globalStats);
-    
-     // PATCH: pass assays
-     Flagger_.applyFlags(ss, edges, leagueAssay, teamAssay, matchupAssay);
-
-     // ── MOTHER CONTRACT OUTPUT (additive only) ──
-     Output_.writeAssayerEdges(ss, edges);
-     Output_.writeAssayerLeaguePurity(ss, leagueAssay);
-
-     Log_.writeToSheet(ss);
-     SpreadsheetApp.getUi().alert("Flags Re-Applied Successfully.");
-       } catch (err) {
-      Log_.error(`FLAGGER FAILED: ${err.message}`);
-      Log_.writeToSheet(ss);
-    }
-  },
 };
 
 /**
@@ -167,13 +125,12 @@ function onOpen() {
     .addSeparator()
     .addItem('🔍 Inspect All Sheets', 'runSheetInspector')
     .addSeparator()
-    .addItem('🚩 Refresh Flags Only', 'runFlagger')
     .addItem('🧹 Clear Logs', 'clearLogs')
     .addToUi();
 }
 
 function runAssay() { Main_.runAssay(); }
-function runFlagger() { Main_.runFlaggerOnly(); }
+
 function clearLogs() { 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(Config_.sheets.logs);

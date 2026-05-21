@@ -5,7 +5,7 @@
 //   1. Config-profile helpers: _safeParseJSON_, _flattenConfigProfile_,
 //      _normalizeConfigVal_, _isThresholdKey_, _bucketCfgValue_,
 //      _getCfgFlat_, _getCfgBucketCached_
-//   2. discoverAll(sideBets, totalsBets, otherBets) — new 3rd arg.
+//   2. discoverAll(sideBets, totalsBets, fleetBets) — new 3rd arg.
 //   3. Fleet discovery pass: per-type, per-threshold-key config edges
 //      with contextual baselines. No Tier1/Tier2 bleed (type is part of
 //      criteria). Hard caps: 25 keys/type, 8 buckets/key.
@@ -294,12 +294,12 @@ const Discovery_ = {
   // Main discovery orchestrator
   // ---------------------------------------------------------------------------
 
-  discoverAll(sideBets, totalsBets, otherBets, globalStats) {
-    otherBets = Array.isArray(otherBets) ? otherBets : [];
+  discoverAll(fleetBets, globalStats) {
+    fleetBets = Array.isArray(fleetBets) ? fleetBets : [];
     if (!this.log) this.init();
     Log_.section("Discovering Edges");
 
-    this.log.info(`Discovery inputs: sideBets=${sideBets.length}, totalsBets=${totalsBets.length}, otherBets=${otherBets.length}`);
+    this.log.info(`Discovery inputs: sideBets=${sideBets.length}, totalsBets=${totalsBets.length}, fleetBets=${fleetBets.length}`);
 
     const discovered = [];
     const t = Config_.thresholds;
@@ -320,244 +320,13 @@ const Discovery_ = {
     };
 
     // ========================================================================
-    //  SIDE DISCOVERY  (contextual baselines at depth ≥ 2)
-    // ========================================================================
-    if (sideBets.length > 0 && !isApproachingTimeout()) {
-      this.log.info(`Scanning ${sideBets.length} side bets for edges`);
-      const sideBaseline = Stats_.calcBasic(sideBets);
-
-      const quarterValues      = [1, 2, 3, 4];
-      const sideValues         = ["H", "A"];
-      const tierValues         = ["STRONG", "MEDIUM", "WEAK"];
-      const spreadBucketValues = Config_.spreadBuckets.map(b => b.name);
-      const confBucketValues   = Config_.confBuckets.map(b => b.name);
-      const boolValues         = [true, false];
-
-      // Pre-build maps
-      const sideByQuarter = new Map();
-      for (let q = 1; q <= 4; q++) {
-        sideByQuarter.set(q, sideBets.filter(b => b.quarter === q));
-      }
-
-      const sideByQuarterSide = new Map();
-      for (let q = 1; q <= 4; q++) {
-        for (const side of sideValues) {
-          sideByQuarterSide.set(`${q}_${side}`,
-            sideBets.filter(b => b.quarter === q && b.side === side));
-        }
-      }
-
-      // ---- Single Attribute (global baseline) ----
-      discovered.push(...this.scanAttribute(
-        sideBets, "Side", "quarter", quarterValues, b => b.quarter, sideBaseline));
-      discovered.push(...this.scanAttribute(
-        sideBets, "Side", "side", sideValues, b => b.side, sideBaseline));
-      discovered.push(...this.scanAttribute(
-        sideBets, "Side", "tier", tierValues, b => b.tier, sideBaseline));
-      discovered.push(...this.scanAttribute(
-        sideBets, "Side", "spreadBucket", spreadBucketValues, b => b.spreadBucket, sideBaseline));
-      discovered.push(...this.scanAttribute(
-        sideBets, "Side", "confBucket", confBucketValues, b => b.confBucket, sideBaseline));
-      discovered.push(...this.scanAttribute(
-        sideBets, "Side", "isWomen", boolValues, b => b.isWomen, sideBaseline));
-
-      // Matchup-based (Side only)
-      const minNMatchup = t.minNMatchup ?? 20;
-      const highVolumeMatchups = [...new Set(sideBets.map(b => b.matchupKey).filter(Boolean))]
-        .filter(mk => sideBets.filter(b => b.matchupKey === mk).length >= minNMatchup);
-      discovered.push(...this.scanAttribute(
-        sideBets, "Side", "matchupKey", highVolumeMatchups, b => b.matchupKey, sideBaseline));
-
-      // ---- Two-Attribute: Quarter + X  ◆ PATCH: contextual baseline ----
-      for (let q = 1; q <= 4; q++) {
-        if (isApproachingTimeout()) break;
-
-        const qBets = sideByQuarter.get(q);
-        if (!qBets || qBets.length < t.minN) continue;
-
-        const qBaseline = Stats_.calcBasic(qBets);        // ◆ contextual
-        const qCriteria = { quarter: q };
-
-        discovered.push(...this.scanAttribute(
-          qBets, "Side", "side", sideValues, b => b.side, qBaseline, qCriteria));
-        discovered.push(...this.scanAttribute(
-          qBets, "Side", "spreadBucket", spreadBucketValues, b => b.spreadBucket, qBaseline, qCriteria));
-        discovered.push(...this.scanAttribute(
-          qBets, "Side", "tier", ["STRONG", "MEDIUM"], b => b.tier, qBaseline, qCriteria));
-        discovered.push(...this.scanAttribute(
-          qBets, "Side", "confBucket", confBucketValues, b => b.confBucket, qBaseline, qCriteria));
-        discovered.push(...this.scanAttribute(
-          qBets, "Side", "isWomen", boolValues, b => b.isWomen, qBaseline, qCriteria));
-      }
-
-      // ---- Three-Attribute: Q + Side + X  ◆ PATCH: contextual baseline ----
-      for (let q = 1; q <= 4; q++) {
-        if (isApproachingTimeout()) break;
-
-        for (const side of sideValues) {
-          if (isApproachingTimeout()) break;
-
-          const key     = `${q}_${side}`;
-          const qsBets  = sideByQuarterSide.get(key);
-          if (!qsBets || qsBets.length < t.minN) continue;
-
-          const qsBaseline = Stats_.calcBasic(qsBets);    // ◆ contextual
-          const criteria   = { quarter: q, side: side };
-
-          discovered.push(...this.scanAttribute(
-            qsBets, "Side", "spreadBucket", spreadBucketValues,
-            b => b.spreadBucket, qsBaseline, criteria));
-          discovered.push(...this.scanAttribute(
-            qsBets, "Side", "isWomen", boolValues,
-            b => b.isWomen, qsBaseline, criteria));
-          discovered.push(...this.scanAttribute(
-            qsBets, "Side", "confBucket", confBucketValues,
-            b => b.confBucket, qsBaseline, criteria));
-          discovered.push(...this.scanAttribute(
-            qsBets, "Side", "tier", tierValues,
-            b => b.tier, qsBaseline, criteria));
-        }
-      }
-
-      this.log.info(`Side discovery found ${discovered.length} raw edges`);
-    }
-
-    // ========================================================================
-    //  TOTALS DISCOVERY  ◆ PATCH: TYPE-SEGMENTED + CONTEXTUAL BASELINES
-    // ========================================================================
-    const totalsStartIdx = discovered.length;
-
-    if (totalsBets.length > 0 && !isApproachingTimeout()) {
-      this.log.info(`Scanning ${totalsBets.length} totals bets for edges`);
-
-      // ----- Step 1: stamp canonical typeKey on every totals bet -----
-      for (const b of totalsBets) {
-        b.typeKey = this._getTotalsTypeKey(b);
-      }
-
-      const totalsBaseline = Stats_.calcBasic(totalsBets);
-
-      const quarterValues    = [1, 2, 3, 4];
-      const directionValues  = ["Over", "Under"];
-      const tierValues       = ["STRONG", "MEDIUM", "WEAK"];
-      const lineBucketValues = Config_.lineBuckets.map(b => b.name);
-      const confBucketValues = Config_.confBuckets.map(b => b.name);
-      const boolValues       = [true, false];
-
-      // ----- Step 2: build typeValues (types with ≥ minN samples) -----
-      const typeCounts = {};
-      for (const b of totalsBets) {
-        typeCounts[b.typeKey] = (typeCounts[b.typeKey] || 0) + 1;
-      }
-      const typeValues = Object.keys(typeCounts).filter(k => typeCounts[k] >= t.minN);
-
-      this.log.info(`Totals type distribution: ${JSON.stringify(typeCounts)}`);
-      this.log.info(`Types with sufficient samples (>=${t.minN}): ${typeValues.join(", ") || "none"}`);
-
-      // ----- Step 3: typeKey-only scan (global baseline) -----
-      // Finds which derivation types are overall better / worse than the pool
-      discovered.push(...this.scanAttribute(
-        totalsBets, "Totals", "typeKey", typeValues,
-        b => b.typeKey, totalsBaseline
-      ));
-
-      // ----- Step 4: type-segmented discovery -----
-      for (const typ of typeValues) {
-        if (isApproachingTimeout()) break;
-
-        const typedBets = totalsBets.filter(b => b.typeKey === typ);
-        if (typedBets.length < t.minN) continue;
-
-        const typeBaseline = Stats_.calcBasic(typedBets);
-        const typeCriteria = { typeKey: typ };
-
-        // ---- 2-attr: TypeKey + X  (baseline = type slice) ----
-        discovered.push(...this.scanAttribute(
-          typedBets, "Totals", "quarter", quarterValues,
-          b => b.quarter, typeBaseline, typeCriteria));
-        discovered.push(...this.scanAttribute(
-          typedBets, "Totals", "direction", directionValues,
-          b => b.direction, typeBaseline, typeCriteria));
-        discovered.push(...this.scanAttribute(
-          typedBets, "Totals", "tier", tierValues,
-          b => b.tier, typeBaseline, typeCriteria));
-        discovered.push(...this.scanAttribute(
-          typedBets, "Totals", "lineBucket", lineBucketValues,
-          b => b.lineBucket, typeBaseline, typeCriteria));
-        discovered.push(...this.scanAttribute(
-          typedBets, "Totals", "confBucket", confBucketValues,
-          b => b.confBucket, typeBaseline, typeCriteria));
-        discovered.push(...this.scanAttribute(
-          typedBets, "Totals", "isWomen", boolValues,
-          b => b.isWomen, typeBaseline, typeCriteria));
-
-        // ---- 3-attr: TypeKey + Quarter + X ----
-        for (let q = 1; q <= 4; q++) {
-          if (isApproachingTimeout()) break;
-
-          const tqBets = typedBets.filter(b => b.quarter === q);
-          if (tqBets.length < t.minN) continue;
-
-          const tqBaseline = Stats_.calcBasic(tqBets);     // ◆ contextual
-          const tqCriteria = { typeKey: typ, quarter: q };
-
-          discovered.push(...this.scanAttribute(
-            tqBets, "Totals", "direction", directionValues,
-            b => b.direction, tqBaseline, tqCriteria));
-          discovered.push(...this.scanAttribute(
-            tqBets, "Totals", "lineBucket", lineBucketValues,
-            b => b.lineBucket, tqBaseline, tqCriteria));
-          discovered.push(...this.scanAttribute(
-            tqBets, "Totals", "tier", tierValues,
-            b => b.tier, tqBaseline, tqCriteria));
-          discovered.push(...this.scanAttribute(
-            tqBets, "Totals", "confBucket", confBucketValues,
-            b => b.confBucket, tqBaseline, tqCriteria));
-          discovered.push(...this.scanAttribute(
-            tqBets, "Totals", "isWomen", boolValues,
-            b => b.isWomen, tqBaseline, tqCriteria));
-        }
-
-        // ---- 4-attr: TypeKey + Quarter + Direction + X ----
-        for (let q = 1; q <= 4; q++) {
-          if (isApproachingTimeout()) break;
-
-          for (const dir of directionValues) {
-            if (isApproachingTimeout()) break;
-
-            const tqdBets = typedBets.filter(b => b.quarter === q && b.direction === dir);
-            if (tqdBets.length < t.minN) continue;
-
-            const tqdBaseline = Stats_.calcBasic(tqdBets); // ◆ contextual
-            const tqdCriteria = { typeKey: typ, quarter: q, direction: dir };
-
-            discovered.push(...this.scanAttribute(
-              tqdBets, "Totals", "lineBucket", lineBucketValues,
-              b => b.lineBucket, tqdBaseline, tqdCriteria));
-            discovered.push(...this.scanAttribute(
-              tqdBets, "Totals", "isWomen", boolValues,
-              b => b.isWomen, tqdBaseline, tqdCriteria));
-            discovered.push(...this.scanAttribute(
-              tqdBets, "Totals", "confBucket", confBucketValues,
-              b => b.confBucket, tqdBaseline, tqdCriteria));
-            discovered.push(...this.scanAttribute(
-              tqdBets, "Totals", "tier", tierValues,
-              b => b.tier, tqdBaseline, tqdCriteria));
-          }
-        }
-      }
-
-      this.log.info(`Totals discovery found ${discovered.length - totalsStartIdx} raw edges`);
-    }
-
-    // ========================================================================
     //  FLEET DISCOVERY  (config_profile threshold edges, v5.0.0)
     //  Per-type, per-threshold-key with contextual baselines.
     //  Hard caps: 25 keys/type, 8 buckets/key, 50 keys/bet.
     // ========================================================================
     const fleetStartIdx = discovered.length;
 
-    const fleetBets = otherBets.filter(b => b && b.source === 'Fleet');
+    fleetBets = fleetBets.filter(b => b && b.source === 'Fleet');
     if (fleetBets.length > 0 && !isApproachingTimeout()) {
       this.log.info(`Scanning ${fleetBets.length} Fleet bets for config-profile edges`);
 
@@ -695,7 +464,7 @@ const Discovery_ = {
       `Discovery complete: ${unique.length} unique edges from ${discovered.length} raw (${elapsedMs}ms)`
     );
 
-    if (otherBets.length > 0 && unique.length === 0) {
+    if (fleetBets.length > 0 && unique.length === 0) {
       this.log.warn("No edges met thresholds; check minN, lift, key caps, and ensure config_profile contains threshold keys.");
     }
 
@@ -703,15 +472,7 @@ const Discovery_ = {
     unique.forEach(e => { gradeCounts[e.grade] = (gradeCounts[e.grade] || 0) + 1; });
     this.log.info("Edge grade distribution:", gradeCounts);
 
-    // ◆ PATCH: log type-segmented Totals breakdown
-    const totalsByType = {};
-    unique.filter(e => e.source === "Totals").forEach(e => {
-      const tk = (e.criteria && e.criteria.typeKey) || "NONE";
-      totalsByType[tk] = (totalsByType[tk] || 0) + 1;
-    });
-    if (Object.keys(totalsByType).length > 0) {
-      this.log.info("Totals edges by typeKey:", totalsByType);
-    }
+
 
     const topTier = unique.filter(e => e.grade === "GOLD" || e.grade === "PLATINUM");
     this.log.info(`Gold/Platinum edges: ${topTier.length}`);

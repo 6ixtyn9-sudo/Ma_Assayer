@@ -672,8 +672,15 @@ const Stats_ = {
     const toxicTeams = Array.isArray(Config_.toxicTeams) ? Config_.toxicTeams : [];
     const eliteTeams = Array.isArray(Config_.eliteTeams) ? Config_.eliteTeams : [];
 
+    let tTeamMinN = Config_.thresholds.minNTeam ?? 25;
+    
+    // v5.0.1 PATCH: Dynamically lower threshold for small datasets so the assay isn't completely empty
+    if (all.length > 0 && all.length < 1000) {
+      tTeamMinN = Math.min(tTeamMinN, Math.max(3, Math.floor(all.length / 50)));
+    }
+
     const tTeam = {
-      minN:         Config_.thresholds.minNTeam         ?? 25,
+      minN:         tTeamMinN,
       minNGold:     Config_.thresholds.minNTeamGold     ?? 40,
       minNPlatinum: Config_.thresholds.minNTeamPlatinum ?? 60
     };
@@ -699,8 +706,7 @@ const Stats_ = {
       // Catch any remaining HIGHEST* / HIGH Q* patterns not in explicit list
       if (t.startsWith("HIGHEST"))   return false;
       if (t.startsWith("HIGH Q"))    return false;
-      if (b.source === "Totals")     return false;
-      if (b.direction)               return false;
+      if (b.direction === "Over" || b.direction === "Under") return false;
       return true;
     });
 
@@ -738,7 +744,6 @@ const Stats_ = {
 
       return {
         team,
-        source: "Side",
         quarter,
         quarterLabel,
         ...basic,
@@ -827,8 +832,15 @@ const Stats_ = {
     const toxicMatchups = Array.isArray(Config_.toxicMatchups) ? Config_.toxicMatchups : [];
     const eliteMatchups = Array.isArray(Config_.eliteMatchups) ? Config_.eliteMatchups : [];
 
+    let tMatchupMinN = Config_.thresholds.minNMatchup ?? 5;
+    
+    // v5.0.1 PATCH: Dynamically lower threshold for small datasets
+    if (all.length > 0 && all.length < 500) {
+      tMatchupMinN = Math.min(tMatchupMinN, Math.max(2, Math.floor(all.length / 100)));
+    }
+
     const tM = {
-      minN: Config_.thresholds.minNMatchup ?? 5,
+      minN: tMatchupMinN,
       minNReliable: Config_.thresholds.minNMatchupReliable ?? 30,
       minNGold: Config_.thresholds.minNMatchupGold ?? 30,
       minNPlatinum: Config_.thresholds.minNMatchupPlatinum ?? 45
@@ -887,7 +899,6 @@ const Stats_ = {
         matchupKey,
         backedTeam,
         opponentTeam,
-        source: "Side",
         quarter,
         quarterLabel,
 

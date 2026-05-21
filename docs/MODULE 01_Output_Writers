@@ -350,7 +350,7 @@ const Output_ = {
     Logger.log(`[writeVaultFlat] Wrote ${rows.length} fleet records to "${SHEET_NAME}" (filtered ${allBets.length - betsToWrite.length} UNKNOWN).`);
   },
 
-  writeVaultDashboard(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, teamAssay, matchupAssay, totalBetCount) {
+  writeVaultDashboard(ss, globalStats, leagueAssay, edges, teamAssay, matchupAssay, totalBetCount) {
     const SHEET_NAME = Config_.sheets.vaultDashboard || "MA_Vault_Dashboard";
 
     let sheet = ss.getSheetByName(SHEET_NAME);
@@ -904,7 +904,7 @@ writeQuarterAnalysis(ss, sideBets, totalsBets, globalStats) {
 /**
  * Write summary sheet with updated labels reflecting tier/quarter granularity
  */
-writeSummary(ss, globalStats, sideStats, totalsStats, leagueAssay, edges, logSummary) {
+writeSummary(ss, globalStats, leagueAssay, edges, logSummary) {
   if (!this.log) this.init();
   Log_.section("Writing Summary");
 

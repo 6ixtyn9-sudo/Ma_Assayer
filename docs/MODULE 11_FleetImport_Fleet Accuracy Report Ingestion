@@ -515,8 +515,10 @@ const FleetImport_ = {
         }
       }
       
+      const isOU = direction === 'Over' || direction === 'Under' || canonType.includes('O_U') || canonType.includes('OU');
       const parsedLineMatch = String(cleanedPick).match(/\(([+-]?\d+(?:\.\d+)?)\)\s*$/) 
-                           || String(cleanedPick).match(/([+-]\d+(?:\.\d+)?)\s*$/);
+                           || String(cleanedPick).match(/([+-]\d+(?:\.\d+)?)\s*$/)
+                           || (isOU ? String(cleanedPick).match(/\b(\d+(?:\.\d+)?)\s*$/) : null);
       if (parsedLineMatch) {
         const val = parsedLineMatch[1];
         const isMoneyline = canonType.includes('1X2') || canonType === 'BANKER' || canonType === 'ROBBER';

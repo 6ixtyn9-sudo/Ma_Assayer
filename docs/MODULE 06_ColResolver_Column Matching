@@ -257,7 +257,7 @@ const ColResolver_ = {
     });
     
     if (missing.length > 0) {
-      this.log.warn(`Missing columns for ${sheetType}: ${missing.join(", ")}`);
+      this.log.debug(`Missing columns for ${sheetType}: ${missing.join(", ")}`);
     }
     
     return { resolved, missing, found };
