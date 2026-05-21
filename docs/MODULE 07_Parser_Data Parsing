@@ -231,10 +231,25 @@ const Parser_ = {
 
     const s = String(val).toUpperCase().trim();
 
-    if (s === "O" || s === "OVER" || s.startsWith("OV") || s.includes("OVER")) return "Over";
-    if (s === "U" || s === "UNDER" || s.startsWith("UN") || s.includes("UNDER")) return "Under";
-    if (s === "H" || s === "HOME" || s.includes("HOME")) return "HOME";
-    if (s === "A" || s === "AWAY" || s.includes("AWAY")) return "AWAY";
+    // Exact matches
+    if (s === "O" || s === "OV" || s === "OVER") return "Over";
+    if (s === "U" || s === "UN" || s === "UNDER") return "Under";
+    if (s === "H" || s === "HOME") return "HOME";
+    if (s === "A" || s === "AWAY") return "AWAY";
+
+    // Word boundary matches for full words
+    if (/\bOVER\b/.test(s)) return "Over";
+    if (/\bUNDER\b/.test(s)) return "Under";
+    if (/\bHOME\b/.test(s)) return "HOME";
+    if (/\bAWAY\b/.test(s)) return "AWAY";
+
+    // Prefix matches for abbreviations (must be followed by space or number)
+    if (/^OV[\s\d]/.test(s) || /^O[\s\d]/.test(s)) return "Over";
+    if (/^UN[\s\d]/.test(s) || /^U[\s\d]/.test(s)) return "Under";
+    
+    // Strict prefix for home/away in spreads (e.g. H -4.5 or A +2)
+    if (/^H[\s+-]/.test(s)) return "HOME";
+    if (/^A[\s+-]/.test(s)) return "AWAY";
 
     return null;
   },

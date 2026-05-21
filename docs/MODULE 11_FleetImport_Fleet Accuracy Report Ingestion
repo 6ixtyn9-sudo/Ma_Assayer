@@ -496,6 +496,21 @@ const FleetImport_ = {
           const parsedSide = Parser_.parseSide(cleanedPick, null);
           if (parsedSide === 'H') direction = 'HOME';
           if (parsedSide === 'A') direction = 'AWAY';
+          
+          // If still no direction (e.g. 1H_1X2 or BANKER pick is just the team name),
+          // deduce direction by checking if pick contains home/away team
+          if (!direction && home && away) {
+            const pickU = cleanedPick.toUpperCase();
+            const homeU = home.toUpperCase();
+            const awayU = away.toUpperCase();
+            
+            // Only deduce if team name is > 2 chars to avoid accidental matches
+            if (homeU.length > 2 && (pickU.includes(homeU) || homeU.includes(pickU))) {
+              direction = 'HOME';
+            } else if (awayU.length > 2 && (pickU.includes(awayU) || awayU.includes(pickU))) {
+              direction = 'AWAY';
+            }
+          }
         }
       }
       if (!line) {
