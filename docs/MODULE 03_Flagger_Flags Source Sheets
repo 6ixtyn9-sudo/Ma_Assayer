@@ -191,7 +191,15 @@ const Flagger_ = {
 
     const league = (bet && bet.league) ? String(bet.league).trim().toUpperCase() : "";
     const betSource = (bet && bet.source) ? bet.source : ((bet && bet.side) ? "Side" : ((bet && bet.direction) ? "Totals" : null));
-    const gender = (bet && bet.isWomen) ? "W" : "M";
+    // Session 21 fix: derive gender from isWomen flag OR from league name when flag is absent.
+    // Fleet bets from MODULE 11 may arrive without isWomen set; falling back to "M" broke
+    // all women's league assay key lookups (e.g. ATW_Side_W_MEDIUM never found).
+    const _isWomenFromLeague = league.length > 1 && !league.endsWith("MW") &&
+      (league.endsWith("W") || league.includes("WOMEN") || league.includes("WNBA") ||
+       league.includes("WBB") || league.includes("LPGA"));
+    const gender = (bet && bet.isWomen === true) ? "W" :
+                   (bet && bet.isWomen === false) ? "M" :
+                   (_isWomenFromLeague ? "W" : "M");
     const tier = (bet && bet.tier) ? String(bet.tier).trim().toUpperCase() : "UNKNOWN";
     const quarterVal = (bet && typeof bet.quarter === "number" && isFinite(bet.quarter)) ? bet.quarter : null;
 
@@ -358,8 +366,11 @@ const Flagger_ = {
           status = `🥉 ${symbol} ${leagueInfo.source || betSource} ${leagueInfo.gender || gender} ${leagueInfo.tier || tier} ${qLabel}`;
         } else if (lgGrade === 'ROCK') {
           status = `🪨 ${symbol} ${leagueInfo.source || betSource} ${leagueInfo.gender || gender} ${leagueInfo.tier || tier} ${qLabel}`;
+        } else {
+          // Session 21 fix: CHARCOAL leagueInfo must emit a full status string.
+          // Previously status stayed "—", producing truncated "CHARCOAL—" labels in MA_Vault.
+          status = `⛔ ${leagueInfo.source || betSource} ${leagueInfo.gender || gender} ${leagueInfo.tier || tier} ${qLabel}`;
         }
-        // CHARCOAL leagueInfo: status stays "—" (will be set by toxic path or edges)
       }
     }
 
