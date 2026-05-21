@@ -612,6 +612,16 @@ const FleetImport_ = {
     ss.getSheets().forEach(sh => {
       const name = sh.getName();
       if (this.MANAGED_SHEET_RE.test(name) && !this.PROTECTED_SHEETS.has(name)) {
+        
+        // Delete the UNKNOWN tab if it exists (since we skip these bets now)
+        if (name === 'UNKNOWN') {
+          try {
+            ss.deleteSheet(sh);
+            log.info('Deleted legacy UNKNOWN tab');
+          } catch(e) {}
+          return;
+        }
+
         // 1. Ensure header row exists and freeze row 1
         sh.getRange(1, 1, 1, H.length).setValues([H]);
         sh.setFrozenRows(1);
