@@ -735,37 +735,94 @@ const FleetImport_ = {
     return sheet;
   },
 
-  // ─── Satellite discovery ──────────────────────────────────────────────────
+ // ─── Satellite discovery ──────────────────────────────────────────────────
 
-  discoverSatellites_(log) {
+discoverSatellites_(log) {
     log = log || Log_.module('FLEET_DISCOVER');
-    log.info('Discovering satellites from registry.json...');
+    log.info('Discovering satellites dynamically from registry.json + Drive folder...');
+
+    // PATCH: do not treat the GitHub registry as the only source of truth.
+    // The registry can be stale while new satellite spreadsheets already exist
+    // in Drive. Load both sources, merge by spreadsheet ID, and keep running if
+    // either source is unavailable. This makes newly-added satellite files
+    // visible on the next import/run without editing code.
+    const merged = [];
+    const seen = new Set();
+
+    const addSat = (sat, source) => {
+      if (!sat || !sat.id) return;
+      const id = String(sat.id).trim();
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      merged.push({
+        id: id,
+        name: String(sat.name || id).trim(),
+        source: source
+      });
+    };
+
     try {
       const resp = UrlFetchApp.fetch(this.REGISTRY_URL, { muteHttpExceptions: true });
       if (resp.getResponseCode() !== 200) throw new Error('HTTP ' + resp.getResponseCode());
       const json = JSON.parse(resp.getContentText());
-      const sats = json.satellites || [];
+      const sats = Array.isArray(json.satellites) ? json.satellites : [];
+      sats.forEach(s => addSat(s, 'registry'));
       log.info(`Registry: ${sats.length} satellites loaded.`);
-      return sats;
     } catch (e) {
-      log.warn('Registry fetch failed: ' + e.message + ' — falling back to Drive folder.');
-      return this._discoverFromDrive_(log);
+      log.warn('Registry fetch failed: ' + e.message + ' — continuing with Drive folder discovery.');
     }
+
+    const beforeDrive = merged.length;
+    const driveSats = this._discoverFromDrive_(log) || [];
+    driveSats.forEach(s => addSat(s, 'drive'));
+    const addedFromDrive = merged.length - beforeDrive;
+
+    log.info(`Satellite discovery merged: ${merged.length} unique satellites ` +
+             `(registry=${beforeDrive}, drive_checked=${driveSats.length}, drive_added=${addedFromDrive}).`);
+
+    return merged;
   },
 
-  _discoverFromDrive_(log) {
+ _discoverFromDrive_(log) {
     try {
       const folder = DriveApp.getFolderById(this.FOLDER_ID);
-      const files  = folder.getFilesByType(MimeType.GOOGLE_SHEETS);
+      const files  = folder.getFiles();
       const sats   = [];
+      const seen   = new Set();
+      const SHEET_MIME = MimeType.GOOGLE_SHEETS;
+      const SHORTCUT_MIME = 'application/vnd.google-apps.shortcut';
+
+      const add = (id, name) => {
+        id = String(id || '').trim();
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        sats.push({ id: id, name: String(name || id).trim() });
+      };
+
       while (files.hasNext()) {
         const f = files.next();
-        sats.push({ id: f.getId(), name: f.getName() });
+        const mime = f.getMimeType();
+
+        if (mime === SHEET_MIME) {
+          add(f.getId(), f.getName());
+          continue;
+        }
+
+        // Support Drive shortcuts to satellite spreadsheets too.
+        if (mime === SHORTCUT_MIME && typeof f.getTargetId === 'function') {
+          try {
+            if (f.getTargetMimeType && f.getTargetMimeType() === SHEET_MIME) {
+              add(f.getTargetId(), f.getName());
+            }
+          } catch (shortcutErr) {
+            log.warn(`Skipping unreadable Drive shortcut ${f.getName()}: ${shortcutErr.message}`);
+          }
+        }
       }
-      log.info(`Drive fallback: ${sats.length} satellites found.`);
+      log.info(`Drive folder: ${sats.length} satellite spreadsheets found.`);
       return sats;
     } catch (e) {
-      log.error('Drive fallback failed: ' + e.message);
+      log.error('Drive folder discovery failed: ' + e.message);
       return [];
     }
   },
@@ -1786,3 +1843,4 @@ function auditUnknownTypes() {
   });
   Logger.log('==== Paste the sanitized keys into TYPE_CANONICAL to resolve. ====');
 }
+
