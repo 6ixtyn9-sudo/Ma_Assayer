@@ -92,7 +92,7 @@ const Main_ = {
     
     // 9. Generate Summary
     const logSummary = Log_.summary();
-    Output_.writeSummary(ss, globalStats, leagueAssay, edges, logSummary);
+    Output_.writeSummary(ss, allBets, globalStats, leagueAssay, edges, logSummary);
     
     // 10. Finish
     Log_.writeToSheet(ss);
