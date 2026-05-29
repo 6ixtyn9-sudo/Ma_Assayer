@@ -926,141 +926,131 @@ writeSummary(ss, allBets, globalStats, leagueAssay, edges, logSummary) {
   const fmt = n => (typeof n === 'number') ? n.toLocaleString('en-US') : String(n || 0);
 
   // ── BY TYPE aggregation ──
-  const byTypeRows = (() => {
-    const byType = {};
-    const combosAll = Object.values(leagueAssay || {});
-    combosAll.filter(l => l?.quarter == null).forEach(l => {
-      const t = (l.typeKey || l.type || "ALL").toUpperCase() || "ALL";
-      if (!byType[t]) byType[t] = { combos: 0, decisive: 0, wins: 0, losses: 0 };
-      byType[t].combos++;
-      byType[t].decisive += l.decisive || 0;
-      byType[t].wins     += l.wins     || 0;
-      byType[t].losses   += l.losses   || 0;
+  const byType = {};
+  allQuarterCombos.forEach(l => {
+    const t = (l.typeKey || l.type || "ALL").toUpperCase() || "ALL";
+    if (!byType[t]) byType[t] = { combos: 0, decisive: 0, wins: 0, losses: 0 };
+    byType[t].combos++;
+    byType[t].decisive += l.decisive || 0;
+    byType[t].wins     += l.wins     || 0;
+    byType[t].losses   += l.losses   || 0;
+  });
+  const byTypeRows = Object.entries(byType)
+    .sort((a, b) => b[1].decisive - a[1].decisive)
+    .map(([t, s]) => {
+      const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
+      return [t, fmt(s.combos), fmt(s.decisive), fmt(s.wins), fmt(s.losses), Stats_.pct(wr), Stats_.getGrade(wr, s.decisive)];
     });
-    return Object.entries(byType)
-      .sort((a, b) => b[1].decisive - a[1].decisive)
-      .map(([t, s]) => {
-        const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
-        return [t, fmt(s.combos), fmt(s.decisive), fmt(s.wins), fmt(s.losses), Stats_.pct(wr), Stats_.getGrade(wr, s.decisive)];
-      });
-  })();
 
   // ── BY TYPE × TIER aggregation ──
-  const byTypeTierRows = (() => {
-    const map = {};
-    (allBets || []).forEach(b => {
-      // Must be decisive to show stats like wins, losses, win rate
-      if (b.result !== 0 && b.result !== 1) return;
-      const typeKey = (b.typeKey || b.type || "ALL").toUpperCase();
-      const tier = (b.tier || "UNKNOWN").toUpperCase();
-      const k = `${typeKey}___${tier}`;
-      if (!map[k]) map[k] = { typeKey, tier, decisive: 0, wins: 0, losses: 0 };
-      map[k].decisive++;
-      if (b.result === 1) map[k].wins++;
-      if (b.result === 0) map[k].losses++;
-    });
+  const byTypeTierMap = {};
+  (allBets || []).forEach(b => {
+    // Must be decisive to show stats like wins, losses, win rate
+    if (b.result !== 0 && b.result !== 1) return;
+    const typeKey = (b.typeKey || b.type || "ALL").toUpperCase();
+    const tier = (b.tier || "UNKNOWN").toUpperCase();
+    const k = `${typeKey}___${tier}`;
+    if (!byTypeTierMap[k]) byTypeTierMap[k] = { typeKey, tier, decisive: 0, wins: 0, losses: 0 };
+    byTypeTierMap[k].decisive++;
+    if (b.result === 1) byTypeTierMap[k].wins++;
+    if (b.result === 0) byTypeTierMap[k].losses++;
+  });
 
-    const tierOrder = ["ELITE", "STRONG", "MEDIUM", "EVEN", "WEAK", "UNKNOWN"];
-    return Object.values(map)
-      .sort((a, b) => {
-        if (a.typeKey !== b.typeKey) return a.typeKey.localeCompare(b.typeKey);
-        const ai = tierOrder.indexOf(a.tier);
-        const bi = tierOrder.indexOf(b.tier);
-        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-      })
-      .map(s => {
-        const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
-        return [s.typeKey, s.tier, fmt(s.decisive), fmt(s.wins), fmt(s.losses), Stats_.pct(wr), Stats_.getGrade(wr, s.decisive)];
-      });
-  })();
+  const tierOrder = ["ELITE", "STRONG", "MEDIUM", "EVEN", "WEAK", "UNKNOWN"];
+  const byTypeTierRows = Object.values(byTypeTierMap)
+    .sort((a, b) => {
+      if (a.typeKey !== b.typeKey) return a.typeKey.localeCompare(b.typeKey);
+      const ai = tierOrder.indexOf(a.tier);
+      const bi = tierOrder.indexOf(b.tier);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    })
+    .map(s => {
+      const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
+      return [s.typeKey, s.tier, fmt(s.decisive), fmt(s.wins), fmt(s.losses), Stats_.pct(wr), Stats_.getGrade(wr, s.decisive)];
+    });
 
   // ── ROBBER DEEP DIVE aggregation ──
-  const robberRows = (() => {
-    const map = {};
-    const robbers = (allBets || []).filter(b => {
-      const typeKey = (b.typeKey || b.type || "").toUpperCase();
-      return typeKey.includes("ROBBER");
-    });
+  const robberMap = {};
+  const robbers = (allBets || []).filter(b => {
+    const typeKey = (b.typeKey || b.type || "").toUpperCase();
+    return typeKey.includes("ROBBER");
+  });
 
-    robbers.forEach(b => {
-      if (b.result !== 0 && b.result !== 1) return; // Only decisive
+  robbers.forEach(b => {
+    if (b.result !== 0 && b.result !== 1) return; // Only decisive
+    
+    let band = "missing odds";
+    const o = parseFloat(b.odds);
+    if (!isNaN(o) && o > 0) {
+      if (o < 1.80) band = "<1.80";
+      else if (o <= 2.20) band = "1.80-2.20";
+      else if (o <= 2.75) band = "2.21-2.75";
+      else if (o <= 3.50) band = "2.76-3.50";
+      else if (o <= 5.00) band = "3.51-5.00";
+      else band = "5.01+";
+    }
+    
+    const tier = (b.tier || "UNKNOWN").toUpperCase();
+    const k = `${tier}___${band}`;
+    
+    if (!robberMap[k]) robberMap[k] = { tier, band, decisive: 0, wins: 0, losses: 0, profit: 0, hasOddsCount: 0 };
+    
+    robberMap[k].decisive++;
+    if (b.result === 1) robberMap[k].wins++;
+    if (b.result === 0) robberMap[k].losses++;
+    
+    if (band !== "missing odds") {
+      robberMap[k].hasOddsCount++;
+      if (b.result === 1) robberMap[k].profit += (o - 1);
+      else if (b.result === 0) robberMap[k].profit -= 1;
+    }
+  });
+
+  const bandOrder = ["<1.80", "1.80-2.20", "2.21-2.75", "2.76-3.50", "3.51-5.00", "5.01+", "missing odds"];
+  const robberRows = Object.values(robberMap)
+    .sort((a, b) => {
+      const ai = tierOrder.indexOf(a.tier);
+      const bi = tierOrder.indexOf(b.tier);
+      if (ai !== bi) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
       
-      let band = "missing odds";
-      const o = parseFloat(b.odds);
-      if (!isNaN(o) && o > 0) {
-        if (o < 1.80) band = "<1.80";
-        else if (o <= 2.20) band = "1.80–2.20";
-        else if (o <= 2.75) band = "2.21–2.75";
-        else if (o <= 3.50) band = "2.76–3.50";
-        else if (o <= 5.00) band = "3.51–5.00";
-        else band = "5.01+";
+      const bandAi = bandOrder.indexOf(a.band);
+      const bandBi = bandOrder.indexOf(b.band);
+      return (bandAi === -1 ? 99 : bandAi) - (bandBi === -1 ? 99 : bandBi);
+    })
+    .map(s => {
+      const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
+      let roiStr = "N/A";
+      if (s.band !== "missing odds" && s.hasOddsCount > 0) {
+        const roi = s.profit / s.hasOddsCount;
+        roiStr = Stats_.lift(roi);
       }
-      
-      const tier = (b.tier || "UNKNOWN").toUpperCase();
-      const k = `${tier}___${band}`;
-      
-      if (!map[k]) map[k] = { tier, band, decisive: 0, wins: 0, losses: 0, profit: 0, hasOddsCount: 0 };
-      
-      map[k].decisive++;
-      if (b.result === 1) map[k].wins++;
-      if (b.result === 0) map[k].losses++;
-      
-      if (band !== "missing odds") {
-        map[k].hasOddsCount++;
-        if (b.result === 1) map[k].profit += (o - 1);
-        else if (b.result === 0) map[k].profit -= 1;
-      }
+      return [s.tier, s.band, fmt(s.decisive), fmt(s.wins), fmt(s.losses), Stats_.pct(wr), Stats_.getGrade(wr, s.decisive), roiStr];
     });
-
-    const tierOrder = ["ELITE", "STRONG", "MEDIUM", "EVEN", "WEAK", "UNKNOWN"];
-    const bandOrder = ["<1.80", "1.80–2.20", "2.21–2.75", "2.76–3.50", "3.51–5.00", "5.01+", "missing odds"];
-
-    return Object.values(map)
-      .sort((a, b) => {
-        const ai = tierOrder.indexOf(a.tier);
-        const bi = tierOrder.indexOf(b.tier);
-        if (ai !== bi) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-        
-        const bandAi = bandOrder.indexOf(a.band);
-        const bandBi = bandOrder.indexOf(b.band);
-        return (bandAi === -1 ? 99 : bandAi) - (bandBi === -1 ? 99 : bandBi);
-      })
-      .map(s => {
-        const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
-        let roiStr = "N/A";
-        if (s.band !== "missing odds" && s.hasOddsCount > 0) {
-          const roi = s.profit / s.hasOddsCount;
-          roiStr = Stats_.lift(roi);
-        }
-        return [s.tier, s.band, fmt(s.decisive), fmt(s.wins), fmt(s.losses), Stats_.pct(wr), Stats_.getGrade(wr, s.decisive), roiStr];
-      });
-  })();
 
   // ── BY TIER aggregation ──
-  const byTierRows = (() => {
-    const byTier = {};
-    allQuarterCombos.forEach(l => {
-      const t = l.tier || "UNKNOWN";
-      if (!byTier[t]) byTier[t] = { combos: 0, decisive: 0, wins: 0, losses: 0 };
-      byTier[t].combos++;
-      byTier[t].decisive += l.decisive || 0;
-      byTier[t].wins     += l.wins     || 0;
-      byTier[t].losses   += l.losses   || 0;
+  const byTier = {};
+  allQuarterCombos.forEach(l => {
+    const t = l.tier || "UNKNOWN";
+    if (!byTier[t]) byTier[t] = { combos: 0, decisive: 0, wins: 0, losses: 0 };
+    byTier[t].combos++;
+    byTier[t].decisive += l.decisive || 0;
+    byTier[t].wins     += l.wins     || 0;
+    byTier[t].losses   += l.losses   || 0;
+  });
+  
+  const byTierRows = Object.entries(byTier)
+    .sort((a, b) => {
+      const ai = tierOrder.indexOf(a[0]);
+      const bi = tierOrder.indexOf(b[0]);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    })
+    .map(([t, s]) => {
+      const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
+      return [t, fmt(s.combos), fmt(s.decisive), fmt(s.wins), fmt(s.losses), Stats_.pct(wr), Stats_.getGrade(wr, s.decisive)];
     });
-    const tierOrder = ["ELITE", "STRONG", "MEDIUM", "EVEN", "WEAK", "UNKNOWN"];
-    return Object.entries(byTier)
-      .sort((a, b) => {
-        const ai = tierOrder.indexOf(a[0]);
-        const bi = tierOrder.indexOf(b[0]);
-        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-      })
-      .map(([t, s]) => {
-        const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
-        return [t, fmt(s.combos), fmt(s.decisive), fmt(s.wins), fmt(s.losses), Stats_.pct(wr), Stats_.getGrade(wr, s.decisive)];
-      });
-  })();
 
-  const data = [
+  // Assemble Data
+  let data = [
     [`⚗️ MA ASSAYER SUMMARY — v${Config_.version}`],
     [`Generated: ${Utils_.formatDate(new Date(), "yyyy-MM-dd HH:mm:ss")}`],
     [""],
@@ -1079,26 +1069,42 @@ writeSummary(ss, allBets, globalStats, leagueAssay, edges, logSummary) {
     ["═══════════════════════════════════════════════════════════"],
     ["BY TYPE (Fleet)"],
     [""],
-    ["Bet Type", "Combos", "Decisive", "Wins", "Losses", "Win Rate", "Grade"],
-    ...byTypeRows,
+    ["Bet Type", "Combos", "Decisive", "Wins", "Losses", "Win Rate", "Grade"]
+  ];
+  
+  data = data.concat(byTypeRows);
+  
+  data = data.concat([
     [""],
     ["═══════════════════════════════════════════════════════════"],
     ["BY TYPE × TIER (Fleet)"],
     [""],
-    ["Bet Type", "Tier", "N", "Wins", "Losses", "Win Rate", "Grade"],
-    ...byTypeTierRows,
+    ["Bet Type", "Tier", "N", "Wins", "Losses", "Win Rate", "Grade"]
+  ]);
+  
+  data = data.concat(byTypeTierRows);
+  
+  data = data.concat([
     [""],
     ["═══════════════════════════════════════════════════════════"],
     ["ROBBER DEEP DIVE"],
     [""],
-    ["Tier", "Odds Band", "N", "Wins", "Losses", "Win Rate", "Grade", "ROI"],
-    ...robberRows,
+    ["Tier", "Odds Band", "N", "Wins", "Losses", "Win Rate", "Grade", "ROI"]
+  ]);
+  
+  data = data.concat(robberRows);
+  
+  data = data.concat([
     [""],
     ["═══════════════════════════════════════════════════════════"],
     ["ACCURACY BY TIER"],
     [""],
-    ["Tier", "Combos", "Decisive", "Wins", "Losses", "Win Rate", "Grade"],
-    ...byTierRows,
+    ["Tier", "Combos", "Decisive", "Wins", "Losses", "Win Rate", "Grade"]
+  ]);
+  
+  data = data.concat(byTierRows);
+  
+  data = data.concat([
     [""],
     ["═══════════════════════════════════════════════════════════"],
     ["DISCOVERY SUMMARY"],
@@ -1117,7 +1123,7 @@ writeSummary(ss, allBets, globalStats, leagueAssay, edges, logSummary) {
     ["Warnings",      fmt(logSummary?.warnings)],
     ["Errors",        fmt(logSummary?.errors)],
     ["Session ID",    logSummary?.sessionId || "N/A"]
-  ];
+  ]);
 
   const maxCols = data.reduce((m, row) => Math.max(m, Array.isArray(row) ? row.length : 1), 4);
 
