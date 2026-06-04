@@ -784,9 +784,25 @@ const Parser_ = {
     FLEET_ALIASES['config_profile'] = ['config_profile', 'configprofile', 'config profile', 'configuration', 'config_snapshot'];
     FLEET_ALIASES['imported_at']    = ['imported_at', 'importedat', 'import date', 'imported date'];
     
+    // A) Prevent MA_Status from hijacking result or outcome
+    if (FLEET_ALIASES['result']) {
+      FLEET_ALIASES['result'] = FLEET_ALIASES['result'].filter(a => !String(a).toLowerCase().includes('status'));
+    }
+    if (FLEET_ALIASES['outcome']) {
+      FLEET_ALIASES['outcome'] = FLEET_ALIASES['outcome'].filter(a => !String(a).toLowerCase().includes('status'));
+    }
+    // Map MA_Status separately
+    FLEET_ALIASES['ma_status'] = ['ma_status', 'status', 'edge status', 'mastatus'];
+
     // Prevent 'satellite_id' from being matched to 'side'
     delete FLEET_ALIASES['side'];
     
+    // C) Diagnostics state
+    let diagOutcomeCount = 0;
+    let diagMaStatusCount = 0;
+    let diagMismatches = [];
+    let diagComputedPushes = 0;
+
     const allBets = [];
     const sheetSummaries = [];
     const skippedSheets = [];
@@ -806,6 +822,30 @@ const Parser_ = {
       const headers = data[0];
       const resolveResult = ColResolver_.resolve(headers, FLEET_ALIASES, sheetName);
       const resolved = resolveResult.resolved;
+
+      // B) Parsing guardrail (failsafe)
+      const maStatusColName = headers.find(h => String(h).toLowerCase().includes('ma_status') || String(h).toLowerCase() === 'status');
+      const maStatusIdx = maStatusColName ? headers.indexOf(maStatusColName) : -1;
+      
+      const outcomeColName = headers.find(h => {
+        const hn = String(h).toLowerCase().trim();
+        return hn === 'outcome' || hn === 'result' || hn === 'outcomes' || hn === 'results';
+      });
+      const trueOutcomeIdx = outcomeColName ? headers.indexOf(outcomeColName) : -1;
+
+      if (trueOutcomeIdx !== -1 && maStatusIdx !== -1) {
+        if (resolved['result'] === maStatusIdx || resolved['outcome'] === maStatusIdx) {
+          this.log.warn(`[FAILSAFE TRIGGERED] Resolver chose MA_Status for result. Overriding to true outcome column (idx ${trueOutcomeIdx}).`);
+          resolved['result'] = trueOutcomeIdx;
+          resolved['outcome'] = trueOutcomeIdx;
+        }
+      }
+      if (maStatusIdx !== -1) {
+        resolved['ma_status'] = maStatusIdx;
+      }
+      // Ensure satellite_id is mapped if present
+      const satColName = headers.find(h => String(h).toLowerCase() === 'satellite_id');
+      if (satColName) resolved['satellite_id'] = headers.indexOf(satColName);
 
       const hasLeague  = resolved['league']  !== undefined;
       const hasMarket  = resolved['market']  !== undefined || resolved['type'] !== undefined;
@@ -835,6 +875,25 @@ const Parser_ = {
 
         const rawMarket  = String(this.getValue(row, resolved, 'market') || this.getValue(row, resolved, 'type') || '');
         const rawOutcome = this.getValue(row, resolved, 'result') || this.getValue(row, resolved, 'outcome');
+        const rawMaStatus = this.getValue(row, resolved, 'ma_status');
+        
+        const rawTrueOutcome = trueOutcomeIdx !== -1 ? row[trueOutcomeIdx] : null;
+        const resultFromOutcome = this.parseOutcome(rawTrueOutcome !== null ? rawTrueOutcome : rawOutcome);
+        const resultUsed = this.parseOutcome(rawOutcome);
+
+        if (rawTrueOutcome !== null && rawTrueOutcome !== '' && rawTrueOutcome !== undefined) diagOutcomeCount++;
+        if (rawMaStatus !== null && rawMaStatus !== '' && rawMaStatus !== undefined) diagMaStatusCount++;
+
+        if (resultFromOutcome !== resultUsed) {
+           diagMismatches.push({
+             satellite_id: this.getValue(row, resolved, 'satellite_id') || 'UNKNOWN',
+             league: leagueRaw,
+             match: this.getValue(row, resolved, 'match'),
+             outcome: rawTrueOutcome,
+             ma_status: rawMaStatus,
+             resultUsed: resultUsed
+           });
+        }
 
         const sanitizedMarket = (rawMarket || 'UNKNOWN')
           .replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').toUpperCase().slice(0, 25);
@@ -846,7 +905,8 @@ const Parser_ = {
           type:            isFleet ? sanitizedMarket : rawMarket,
           typeKey:         sanitizedMarket,
           tier:            this.parseTier(this.getValue(row, resolved, 'tier')),
-          result:          this.parseOutcome(rawOutcome),
+          result:          resultUsed,
+          ma_status:       rawMaStatus,
           match:           this.getValue(row, resolved, 'match')  || '',
           home:            this.getValue(row, resolved, 'home')   || '',
           away:            this.getValue(row, resolved, 'away')   || '',
@@ -870,7 +930,7 @@ const Parser_ = {
 
         if (bet.result === 1)  bet.win  = 1;
         else if (bet.result === 0)  bet.loss = 1;
-        else if (bet.result === -1) bet.push = 1;
+        else if (bet.result === -1) { bet.push = 1; diagComputedPushes++; }
 
         bet.isWomen = this.isWomenLeague(bet.league, bet.match);
         if (bet.isWomen) womenIntakeCount++; else menIntakeCount++;
@@ -889,6 +949,22 @@ const Parser_ = {
       sheetSummaries.push({ sheetName, isFleet, rowsRead: data.length - 1, rowsParsed: parsed, rowsSkipped: skipped });
       totalSkippedRows += skipped;
       this.log.info(`Parsed ${sheetName} [${isFleet ? 'Fleet' : 'Other'}]: ${parsed} bets, ${skipped} skipped`);
+    }
+
+    // C) Proof / diagnostics logging
+    this.log.info('--- INTEGRITY PROOF: OUTCOME VS MA_STATUS ---');
+    this.log.info(`Rows with explicit Outcome: ${diagOutcomeCount}`);
+    this.log.info(`Rows with MA_Status: ${diagMaStatusCount}`);
+    this.log.info(`Computed Pushes explicitly tracked: ${diagComputedPushes}`);
+    this.log.info(`Mismatches (resultFromOutcome vs resultUsed): ${diagMismatches.length}`);
+    
+    if (diagMismatches.length > 0) {
+      this.log.warn(`WARNING: ${diagMismatches.length} mismatches found between true outcome and used result. Samples:`);
+      diagMismatches.slice(0, 5).forEach(m => {
+        this.log.warn(`  [${m.satellite_id}] ${m.league} | ${m.match} | Outcome: ${m.outcome} | MA_Status: ${m.ma_status} | Used: ${m.resultUsed}`);
+      });
+    } else {
+      this.log.success('SUCCESS: mismatch count == 0. All results properly mapped from true game outcome.');
     }
 
     this.log.info(`Integrated Other markets into league purity: intakeSheets=${sheetSummaries.length} intakeBets=${allBets.length}`);
