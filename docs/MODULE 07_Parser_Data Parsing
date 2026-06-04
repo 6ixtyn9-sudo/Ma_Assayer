@@ -823,7 +823,7 @@ const Parser_ = {
       const resolveResult = ColResolver_.resolve(headers, FLEET_ALIASES, sheetName);
       const resolved = resolveResult.resolved;
 
-      // B) Parsing guardrail (failsafe)
+      // A) Parsing guardrail: locate true outcome column and MA_Status column
       const maStatusColName = headers.find(h => String(h).toLowerCase().includes('ma_status') || String(h).toLowerCase() === 'status');
       const maStatusIdx = maStatusColName ? headers.indexOf(maStatusColName) : -1;
       
@@ -833,16 +833,19 @@ const Parser_ = {
       });
       const trueOutcomeIdx = outcomeColName ? headers.indexOf(outcomeColName) : -1;
 
-      if (trueOutcomeIdx !== -1 && maStatusIdx !== -1) {
-        if (resolved['result'] === maStatusIdx || resolved['outcome'] === maStatusIdx) {
-          this.log.warn(`[FAILSAFE TRIGGERED] Resolver chose MA_Status for result. Overriding to true outcome column (idx ${trueOutcomeIdx}).`);
-          resolved['result'] = trueOutcomeIdx;
-          resolved['outcome'] = trueOutcomeIdx;
-        }
+      // A) UNCONDITIONALLY pin resolved['outcome'] and resolved['result'] to the true outcome column.
+      // This prevents ColResolver's fuzzy pass from landing on MA_Grade/MA_Status when the real
+      // Outcome/Result column exists.
+      if (trueOutcomeIdx !== -1) {
+        resolved['outcome'] = trueOutcomeIdx;
+        resolved['result']  = trueOutcomeIdx;
       }
       if (maStatusIdx !== -1) {
         resolved['ma_status'] = maStatusIdx;
       }
+      // Diagnostic: log the column indices being used for transparency
+      this.log.info(`[COL-PIN] ${sheetName}: trueOutcomeIdx=${trueOutcomeIdx} ("${outcomeColName||\'none\'}") | resolved.result=${resolved['result']} | resolved.outcome=${resolved['outcome']} | headers[trueOutcomeIdx]="${trueOutcomeIdx !== -1 ? headers[trueOutcomeIdx] : 'N/A'}"`);
+
       // Ensure satellite_id is mapped if present
       const satColName = headers.find(h => String(h).toLowerCase() === 'satellite_id');
       if (satColName) resolved['satellite_id'] = headers.indexOf(satColName);
@@ -874,7 +877,8 @@ const Parser_ = {
         if (!leagueRaw || String(leagueRaw).trim() === '') { skipped++; continue; }
 
         const rawMarket  = String(this.getValue(row, resolved, 'market') || this.getValue(row, resolved, 'type') || '');
-        const rawOutcome = this.getValue(row, resolved, 'result') || this.getValue(row, resolved, 'outcome');
+        // B) Prefer 'outcome' first; fall back to 'result' (both are pinned to trueOutcomeIdx, this is a double-safety)
+        const rawOutcome = this.getValue(row, resolved, 'outcome') || this.getValue(row, resolved, 'result');
         const rawMaStatus = this.getValue(row, resolved, 'ma_status');
         
         const rawTrueOutcome = trueOutcomeIdx !== -1 ? row[trueOutcomeIdx] : null;
@@ -963,6 +967,9 @@ const Parser_ = {
       diagMismatches.slice(0, 5).forEach(m => {
         this.log.warn(`  [${m.satellite_id}] ${m.league} | ${m.match} | Outcome: ${m.outcome} | MA_Status: ${m.ma_status} | Used: ${m.resultUsed}`);
       });
+      // C) HARD GATE: abort the run — do not write any contract with bad data.
+      Log_.sectionEnd('Parsing Intake Markets');
+      throw new Error(`[ABORT] parseIntakeMarketSheets: ${diagMismatches.length} outcome mismatches detected. Fix source data or column mapping before running.`);
     } else {
       this.log.success('SUCCESS: mismatch count == 0. All results properly mapped from true game outcome.');
     }
