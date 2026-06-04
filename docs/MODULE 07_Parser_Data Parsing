@@ -844,7 +844,7 @@ const Parser_ = {
         resolved['ma_status'] = maStatusIdx;
       }
       // Diagnostic: log the column indices being used for transparency
-      this.log.info(`[COL-PIN] ${sheetName}: trueOutcomeIdx=${trueOutcomeIdx} ("${outcomeColName||\'none\'}") | resolved.result=${resolved['result']} | resolved.outcome=${resolved['outcome']} | headers[trueOutcomeIdx]="${trueOutcomeIdx !== -1 ? headers[trueOutcomeIdx] : 'N/A'}"`);
+      this.log.info('[COL-PIN] ' + sheetName + ': trueOutcomeIdx=' + trueOutcomeIdx + ' ("' + (outcomeColName || 'none') + '") | resolved.result=' + resolved['result'] + ' | resolved.outcome=' + resolved['outcome'] + ' | headers[trueOutcomeIdx]="' + (trueOutcomeIdx !== -1 ? headers[trueOutcomeIdx] : 'N/A') + '"');
 
       // Ensure satellite_id is mapped if present
       const satColName = headers.find(h => String(h).toLowerCase() === 'satellite_id');
