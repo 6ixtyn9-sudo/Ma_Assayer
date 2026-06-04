@@ -1066,12 +1066,17 @@ writeSummary(ss, allBets, globalStats, leagueAssay, edges, logSummary) {
   // ── BY TIER aggregation ──
   const byTier = {};
   allQuarterCombos.forEach(l => {
-    const t = l.tier || "UNKNOWN";
+    const t = (l.tier || "UNKNOWN").toUpperCase();
     if (!byTier[t]) byTier[t] = { combos: 0, decisive: 0, wins: 0, losses: 0 };
     byTier[t].combos++;
-    byTier[t].decisive += l.decisive || 0;
-    byTier[t].wins     += l.wins     || 0;
-    byTier[t].losses   += l.losses   || 0;
+  });
+  
+  decisiveBets.forEach(b => {
+    const t = (b.tier || "UNKNOWN").toUpperCase();
+    if (!byTier[t]) byTier[t] = { combos: 0, decisive: 0, wins: 0, losses: 0 };
+    byTier[t].decisive++;
+    if (b.result === 1) byTier[t].wins++;
+    if (b.result === 0) byTier[t].losses++;
   });
   
   const byTierRows = Object.entries(byTier)
@@ -1217,6 +1222,16 @@ writeSummary(ss, allBets, globalStats, leagueAssay, edges, logSummary) {
   if (proofPass) {
     logProof("I5 All typeKeys match their tier sum", 1, 1);
   }
+
+  let sumByTierDecisive = 0, sumByTierWins = 0, sumByTierLosses = 0;
+  Object.values(byTier).forEach(s => {
+    sumByTierDecisive += s.decisive;
+    sumByTierWins += s.wins;
+    sumByTierLosses += s.losses;
+  });
+  logProof("I6 SUM_BY_TIER.decisive vs OVERALL", overallDecisive, sumByTierDecisive);
+  logProof("I6 SUM_BY_TIER.wins vs OVERALL", overallWins, sumByTierWins);
+  logProof("I6 SUM_BY_TIER.losses vs OVERALL", overallLosses, sumByTierLosses);
 
   data = data.concat([
     [""],
