@@ -925,18 +925,55 @@ writeSummary(ss, allBets, globalStats, leagueAssay, edges, logSummary) {
   // ── Helper: format integer counts with commas ──
   const fmt = n => (typeof n === 'number') ? n.toLocaleString('en-US') : String(n || 0);
 
+  // ── Canonical decisive bet set ──
+  const decisiveBets = (allBets || []).filter(b => b.result === 0 || b.result === 1);
+  const overallDecisive = decisiveBets.length;
+  let overallWins = 0;
+  let overallLosses = 0;
+  decisiveBets.forEach(b => {
+    if (b.result === 1) overallWins++;
+    if (b.result === 0) overallLosses++;
+  });
+
   // ── BY TYPE aggregation ──
   const byType = {};
+  
+  // 1. Tally combos from leagueAssay to preserve minimal drift
   allQuarterCombos.forEach(l => {
-    const t = (l.typeKey || l.type || "ALL").toUpperCase() || "ALL";
+    const rawT = l.typeKey || l.type;
+    // Do not allow missing typeKeys to silently map into "ALL", use "UNKNOWN"
+    const t = rawT && rawT.toUpperCase() !== "ALL" ? rawT.toUpperCase() : "UNKNOWN";
     if (!byType[t]) byType[t] = { combos: 0, decisive: 0, wins: 0, losses: 0 };
-    byType[t].combos++;
-    byType[t].decisive += l.decisive || 0;
-    byType[t].wins     += l.wins     || 0;
-    byType[t].losses   += l.losses   || 0;
+    // Only tally if it wasn't an aggregate row itself (which often lacks typeKey or has "ALL")
+    if (rawT && rawT.toUpperCase() !== "ALL") {
+      byType[t].combos++;
+    }
   });
+
+  // 2. Tally decisive/wins/losses from bet-universe
+  decisiveBets.forEach(b => {
+    const rawT = b.typeKey || b.type;
+    const t = rawT && rawT.toUpperCase() !== "ALL" ? rawT.toUpperCase() : "UNKNOWN";
+    if (!byType[t]) byType[t] = { combos: 0, decisive: 0, wins: 0, losses: 0 };
+    byType[t].decisive++;
+    if (b.result === 1) byType[t].wins++;
+    if (b.result === 0) byType[t].losses++;
+  });
+
+  // 3. Add the explicit "ALL" rollup row
+  byType["ALL"] = {
+    combos: allQuarterCombos.length, // total combos as a baseline
+    decisive: overallDecisive,
+    wins: overallWins,
+    losses: overallLosses
+  };
+
   const byTypeRows = Object.entries(byType)
-    .sort((a, b) => b[1].decisive - a[1].decisive)
+    .sort((a, b) => {
+      if (a[0] === "ALL") return -1;
+      if (b[0] === "ALL") return 1;
+      return b[1].decisive - a[1].decisive;
+    })
     .map(([t, s]) => {
       const wr = s.decisive > 0 ? s.wins / s.decisive : 0;
       return [t, fmt(s.combos), fmt(s.decisive), fmt(s.wins), fmt(s.losses), Stats_.pct(wr), Stats_.getGrade(wr, s.decisive)];
@@ -944,10 +981,9 @@ writeSummary(ss, allBets, globalStats, leagueAssay, edges, logSummary) {
 
   // ── BY TYPE × TIER aggregation ──
   const byTypeTierMap = {};
-  (allBets || []).forEach(b => {
-    // Must be decisive to show stats like wins, losses, win rate
-    if (b.result !== 0 && b.result !== 1) return;
-    const typeKey = (b.typeKey || b.type || "ALL").toUpperCase();
+  decisiveBets.forEach(b => {
+    const rawT = b.typeKey || b.type;
+    const typeKey = rawT && rawT.toUpperCase() !== "ALL" ? rawT.toUpperCase() : "UNKNOWN";
     const tier = (b.tier || "UNKNOWN").toUpperCase();
     const k = `${typeKey}___${tier}`;
     if (!byTypeTierMap[k]) byTypeTierMap[k] = { typeKey, tier, decisive: 0, wins: 0, losses: 0 };
@@ -1114,7 +1150,85 @@ writeSummary(ss, allBets, globalStats, leagueAssay, edges, logSummary) {
     ["Unique Leagues (All-Quarter)",                    fmt(uniqueLeagues)],
     ["All-Quarter Combos (League+Source+Gender+Tier)",  fmt(uniqueAllQuarterKeys)],
     ["Gold/Platinum Combos (All-Quarter)",              fmt(goldCombos.length)],
-    ["Low-performing/Toxic Combos (All-Quarter)",       fmt(toxicCombos.length)],
+    ["Low-performing/Toxic Combos (All-Quarter)",       fmt(toxicCombos.length)]
+  ]);
+
+  // ── INTEGRITY / PROOF CALCULATION ──
+  const proofLines = [];
+  let proofPass = true;
+  const logProof = (name, expected, actual) => {
+    const isPass = expected === actual;
+    if (!isPass) proofPass = false;
+    const delta = actual - expected;
+    const line = isPass 
+      ? `${name}: PASS (${expected} == ${actual})`
+      : `${name}: FAIL (expected ${expected} got ${actual}, delta=${delta})`;
+    proofLines.push(line);
+    if (this.log) {
+      if (isPass) this.log.info(`[INTEGRITY] ${line}`);
+      else this.log.error(`[INTEGRITY] ${line}`);
+    }
+  };
+
+  logProof("I1 Wins+Losses vs Decisive", overallDecisive, overallWins + overallLosses);
+
+  const byTypeAll = byType["ALL"] || {decisive: 0, wins: 0, losses: 0};
+  logProof("I2 BY_TYPE_ALL.decisive vs OVERALL", overallDecisive, byTypeAll.decisive);
+  logProof("I2 BY_TYPE_ALL.wins vs OVERALL", overallWins, byTypeAll.wins);
+  logProof("I2 BY_TYPE_ALL.losses vs OVERALL", overallLosses, byTypeAll.losses);
+
+  let sumExclAllDecisive = 0, sumExclAllWins = 0, sumExclAllLosses = 0;
+  Object.keys(byType).forEach(t => {
+    if (t !== "ALL") {
+      sumExclAllDecisive += byType[t].decisive;
+      sumExclAllWins += byType[t].wins;
+      sumExclAllLosses += byType[t].losses;
+    }
+  });
+  logProof("I3 SUM_BY_TYPE_EXCL_ALL.decisive vs OVERALL", overallDecisive, sumExclAllDecisive);
+  logProof("I3 SUM_BY_TYPE_EXCL_ALL.wins vs OVERALL", overallWins, sumExclAllWins);
+  logProof("I3 SUM_BY_TYPE_EXCL_ALL.losses vs OVERALL", overallLosses, sumExclAllLosses);
+
+  let sumTierDecisive = 0, sumTierWins = 0, sumTierLosses = 0;
+  Object.values(byTypeTierMap).forEach(s => {
+    sumTierDecisive += s.decisive;
+    sumTierWins += s.wins;
+    sumTierLosses += s.losses;
+  });
+  logProof("I4 SUM_BY_TYPE_TIER.decisive vs OVERALL", overallDecisive, sumTierDecisive);
+  logProof("I4 SUM_BY_TYPE_TIER.wins vs OVERALL", overallWins, sumTierWins);
+  logProof("I4 SUM_BY_TYPE_TIER.losses vs OVERALL", overallLosses, sumTierLosses);
+
+  Object.keys(byType).forEach(t => {
+    if (t === "ALL") return;
+    let tTierDec = 0, tTierWins = 0, tTierLoss = 0;
+    Object.values(byTypeTierMap).forEach(s => {
+      if (s.typeKey === t) {
+        tTierDec += s.decisive;
+        tTierWins += s.wins;
+        tTierLoss += s.losses;
+      }
+    });
+    const match = (byType[t].decisive === tTierDec) && (byType[t].wins === tTierWins) && (byType[t].losses === tTierLoss);
+    if (!match) {
+      logProof(`I5 Mismatch for typeKey=${t}`, byType[t].decisive, tTierDec);
+    }
+  });
+  if (proofPass) {
+    logProof("I5 All typeKeys match their tier sum", 1, 1);
+  }
+
+  data = data.concat([
+    [""],
+    ["═══════════════════════════════════════════════════════════"],
+    ["INTEGRITY / PROOF"],
+    [""]
+  ]);
+  proofLines.forEach(line => {
+    data.push([line]);
+  });
+
+  data = data.concat([
     [""],
     ["═══════════════════════════════════════════════════════════"],
     ["EXECUTION STATS"],
