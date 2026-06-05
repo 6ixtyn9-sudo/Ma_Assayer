@@ -53,6 +53,11 @@ const FleetImport_ = {
     'over','under','result','actual','ev'
   ],
 
+  // SEED LIST: league codes that collide across multiple satellites.
+  // LNB = France (LNB Pro A) + Dominican Republic (LNB).
+  // Expand this set when the collision audit below logs new unknowns.
+  LEAGUE_CODE_COLLISIONS: new Set(['LNB']),
+
   // ─── Core import ──────────────────────────────────────────────────────────
 
 
@@ -154,6 +159,10 @@ const FleetImport_ = {
 
       // buckets: { 'BANKER': [ {key, data}, … ], 'SNIPER_OU': [...], … }
       const buckets = {};
+
+      // Collision audit accumulator: rawLeague → Set of satellite names.
+      // Detects new collisions not yet in LEAGUE_CODE_COLLISIONS.
+      const collisionAudit = {};
 
       // Clear on fresh run OR when resume restarts from 0 (no prior chunks)
       const isGenuineResume = opts.resume && startIdx > 0;
@@ -324,6 +333,15 @@ const FleetImport_ = {
 
             const rowObj = this._buildRowObj_(raw, resolved, sat, configSnapshot);
             if (!rowObj) { satSkipped++; continue; }  // UNKNOWN type — skip entirely
+
+            // Collision audit: record raw league code before disambiguation.
+            // getRaw is already in scope in this loop (defined earlier in the iteration).
+            const rawLeagueAudit = getRaw('league').toUpperCase();
+            if (rawLeagueAudit) {
+              if (!collisionAudit[rawLeagueAudit]) collisionAudit[rawLeagueAudit] = new Set();
+              collisionAudit[rawLeagueAudit].add(sat.name || sat.id);
+            }
+
             const tabName = this._typeToTab_(rowObj.type);
 
             const keyParts = [
@@ -384,6 +402,20 @@ const FleetImport_ = {
           return false;
         }
         throw e;
+      }
+
+      // Collision audit: log any code seen from 2+ satellites not yet in seed set.
+      const unresolvedCollisions = [];
+      for (const [rawCode, satSet] of Object.entries(collisionAudit)) {
+        if (satSet.size > 1 && !this.LEAGUE_CODE_COLLISIONS.has(rawCode)) {
+          unresolvedCollisions.push(rawCode + ' [' + [...satSet].join(', ') + ']');
+        }
+      }
+      if (unresolvedCollisions.length > 0) {
+        log.error(
+          '[COLLISION_AUDIT] CRITICAL — unresolved league code collisions detected. ' +
+          'Add to LEAGUE_CODE_COLLISIONS immediately: ' + unresolvedCollisions.join(' | ')
+        );
       }
 
       this._flushBuckets_(ss, buckets, log, report);
@@ -593,10 +625,18 @@ const FleetImport_ = {
       }
     }
 
+    // Disambiguate colliding league codes using a satellite name slug.
+    // sat.name is in scope here (passed as a parameter to _buildRowObj_).
+    let leagueVal = get('league');
+    if (this.LEAGUE_CODE_COLLISIONS.has(String(leagueVal || '').trim().toUpperCase())) {
+      const slug = String(sat.name || '').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
+      leagueVal = String(leagueVal || '').trim().toUpperCase() + '_' + slug;
+    }
+
     return {
       satellite_id:   sat.id,
       satellite_name: sat.name,
-      league:         get('league'),
+      league:         leagueVal,
       date:           this._normalizeDate_(get('date')),
       match:          get('match'),
       pick:           pick,
