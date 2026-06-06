@@ -162,7 +162,7 @@ const FleetImport_ = {
       const buckets = {};
 
       // Collision audit accumulator: rawLeague → Set of satellite names.
-      // Detects new collisions not yet in LEAGUE_CODE_COLLISIONS.
+      // Records observed raw-code collisions for diagnostic logging.
       const collisionAudit = {};
 
       // Clear on fresh run OR when resume restarts from 0 (no prior chunks)
